@@ -1,0 +1,14 @@
+[
+  { "id": "e1", "sessionId": "s1", "sequence": 0, "timestamp": "2026-09-22T00:00:00.000Z", "type": "session.started", "nativeSessionId": "native-1" },
+  { "id": "e2", "sessionId": "s1", "sequence": 1, "timestamp": "2026-09-22T00:00:01.000Z", "type": "text.delta", "content": "Hello" },
+  { "id": "e3", "sessionId": "s1", "sequence": 2, "timestamp": "2026-09-22T00:00:02.000Z", "type": "message", "role": "agent", "content": "Done", "format": "markdown" },
+  { "id": "e4", "sessionId": "s1", "sequence": 3, "timestamp": "2026-09-22T00:00:03.000Z", "type": "tool.started", "toolName": "read", "title": "Read file", "input": { "path": "README.md" } },
+  { "id": "e5", "sessionId": "s1", "sequence": 4, "timestamp": "2026-09-22T00:00:04.000Z", "type": "tool.finished", "toolName": "read", "output": { "bytes": 10 } },
+  { "id": "e6", "sessionId": "s1", "sequence": 5, "timestamp": "2026-09-22T00:00:05.000Z", "type": "command", "command": "pnpm test", "status": "completed", "exitCode": 0 },
+  { "id": "e7", "sessionId": "s1", "sequence": 6, "timestamp": "2026-09-22T00:00:06.000Z", "type": "file.changed", "relativePath": "src/index.ts", "change": "modified" },
+  { "id": "e8", "sessionId": "s1", "sequence": 7, "timestamp": "2026-09-22T00:00:07.000Z", "type": "approval.requested", "interactionId": "i1", "title": "Run command", "actions": ["approve_once", "reject"] },
+  { "id": "e9", "sessionId": "s1", "sequence": 8, "timestamp": "2026-09-22T00:00:08.000Z", "type": "question.requested", "interactionId": "i2", "question": "Choose", "options": [{ "id": "o1", "label": "One" }], "allowFreeText": true },
+  { "id": "e10", "sessionId": "s1", "sequence": 9, "timestamp": "2026-09-22T00:00:09.000Z", "type": "status", "status": "waiting_user", "message": "Waiting" },
+  { "id": "e11", "sessionId": "s1", "sequence": 10, "timestamp": "2026-09-22T00:00:10.000Z", "type": "error", "code": "failed", "message": "Failed", "recoverable": false },
+  { "id": "e12", "sessionId": "s1", "sequence": 11, "timestamp": "2026-09-22T00:00:11.000Z", "type": "session.completed", "outcome": "completed" }
+]

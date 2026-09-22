@@ -1,0 +1,18 @@
+{
+  "name": "@agentide/agent-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": "./dist/index.js",
+  "dependencies": {
+    "@agentide/protocol": "workspace:*",
+    "@agentide/shared-types": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false",
+    "test": "node --test test/*.test.mjs"
+  }
+}

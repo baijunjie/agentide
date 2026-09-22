@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "response-1",
+  "type": "project.list.response",
+  "sourceDeviceId": "mac-1",
+  "timestamp": "2026-09-22T00:00:01.000Z",
+  "replyTo": "request-1",
+  "ok": false,
+  "error": null
+}

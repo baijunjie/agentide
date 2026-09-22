@@ -1,0 +1,18 @@
+{
+  "name": "@agentide/agent-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "dependencies": {
+    "@agentide/agent-core": "workspace:*",
+    "@agentide/protocol": "workspace:*",
+    "@agentide/shared-types": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false",
+    "start": "node dist/main.js",
+    "test": "node --test"
+  }
+}

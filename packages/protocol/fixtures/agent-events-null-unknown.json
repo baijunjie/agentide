@@ -1,0 +1,4 @@
+[
+  { "id": "e1", "sessionId": "s1", "sequence": 1, "timestamp": "2026-09-22T00:00:00.000Z", "type": "tool.started", "toolName": "read", "input": null },
+  { "id": "e2", "sessionId": "s1", "sequence": 2, "timestamp": "2026-09-22T00:00:00.000Z", "type": "tool.finished", "toolName": "read", "output": null }
+]

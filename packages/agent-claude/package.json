@@ -1,0 +1,17 @@
+{
+  "name": "@agentide/agent-claude",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": "./dist/index.js",
+  "dependencies": {
+    "@agentide/agent-core": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "check": "tsc -b --pretty false",
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,6 @@
+packages:
+  - apps/server
+  - apps/agent-host
+  - packages/*
+
+onlyBuiltDependencies: []

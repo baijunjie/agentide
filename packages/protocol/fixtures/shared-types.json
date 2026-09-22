@@ -1,0 +1,28 @@
+{
+  "project": {
+    "id": "project-1",
+    "name": "AgentIDE",
+    "rootPath": "/workspace/AgentIDE",
+    "createdAt": "2026-09-22T00:00:00.000Z",
+    "enabledAgents": ["codex", "claude"]
+  },
+  "session": {
+    "id": "session-1",
+    "projectId": "project-1",
+    "agentType": "codex",
+    "nativeSessionId": "native-1",
+    "title": "First session",
+    "status": "waiting_user",
+    "createdAt": "2026-09-22T00:00:00.000Z",
+    "updatedAt": "2026-09-22T00:00:01.000Z"
+  },
+  "fileEntry": {
+    "name": "README.md",
+    "relativePath": "README.md",
+    "type": "file",
+    "size": 128,
+    "extension": "md",
+    "isText": true,
+    "isImage": false
+  }
+}

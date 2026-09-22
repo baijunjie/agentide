@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentide.local/schema/agent-event.schema.json",
+  "title": "AgentIDE Agent Event",
+  "oneOf": [
+    { "$ref": "#/$defs/sessionStarted" },
+    { "$ref": "#/$defs/textDelta" },
+    { "$ref": "#/$defs/message" },
+    { "$ref": "#/$defs/toolStarted" },
+    { "$ref": "#/$defs/toolFinished" },
+    { "$ref": "#/$defs/command" },
+    { "$ref": "#/$defs/fileChanged" },
+    { "$ref": "#/$defs/approvalRequested" },
+    { "$ref": "#/$defs/questionRequested" },
+    { "$ref": "#/$defs/status" },
+    { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/sessionCompleted" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["id", "sessionId", "sequence", "timestamp", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "timestamp": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" },
+        "type": { "type": "string" }
+      }
+    },
+    "sessionStarted": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "properties": { "type": { "const": "session.started" }, "nativeSessionId": { "type": "string" } } }
+      ]
+    },
+    "textDelta": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["content"], "properties": { "type": { "const": "text.delta" }, "content": { "type": "string" } } }
+      ]
+    },
+    "message": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["role", "content", "format"],
+          "properties": {
+            "type": { "const": "message" },
+            "role": { "enum": ["agent", "user", "system"] },
+            "content": { "type": "string" },
+            "format": { "enum": ["plain", "markdown"] }
+          }
+        }
+      ]
+    },
+    "toolStarted": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["toolName"], "properties": { "type": { "const": "tool.started" }, "toolName": { "type": "string" }, "title": { "type": "string" }, "input": {} } }
+      ]
+    },
+    "toolFinished": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["toolName"], "properties": { "type": { "const": "tool.finished" }, "toolName": { "type": "string" }, "output": {}, "error": { "type": "string" } } }
+      ]
+    },
+    "command": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["command", "status"], "properties": { "type": { "const": "command" }, "command": { "type": "string" }, "status": { "enum": ["started", "completed", "failed"] }, "exitCode": { "type": "integer" } } }
+      ]
+    },
+    "fileChanged": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["relativePath", "change"], "properties": { "type": { "const": "file.changed" }, "relativePath": { "type": "string" }, "change": { "enum": ["created", "modified", "deleted"] } } }
+      ]
+    },
+    "approvalRequested": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["interactionId", "title", "actions"],
+          "properties": {
+            "type": { "const": "approval.requested" },
+            "interactionId": { "type": "string" },
+            "title": { "type": "string" },
+            "description": { "type": "string" },
+            "command": { "type": "string" },
+            "actions": { "type": "array", "items": { "enum": ["approve_once", "approve_session", "reject"] }, "minItems": 1 }
+          }
+        }
+      ]
+    },
+    "questionRequested": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["interactionId", "question", "allowFreeText"],
+          "properties": {
+            "type": { "const": "question.requested" },
+            "interactionId": { "type": "string" },
+            "question": { "type": "string" },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "label"],
+                "properties": { "id": { "type": "string" }, "label": { "type": "string" }, "description": { "type": "string" } },
+                "additionalProperties": false
+              }
+            },
+            "allowFreeText": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "status": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["status"], "properties": { "type": { "const": "status" }, "status": { "enum": ["running", "waiting_user"] }, "message": { "type": "string" } } }
+      ]
+    },
+    "error": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["code", "message", "recoverable"], "properties": { "type": { "const": "error" }, "code": { "type": "string" }, "message": { "type": "string" }, "recoverable": { "type": "boolean" } } }
+      ]
+    },
+    "sessionCompleted": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["outcome"], "properties": { "type": { "const": "session.completed" }, "outcome": { "enum": ["completed", "failed", "cancelled"] } } }
+      ]
+    }
+  }
+}

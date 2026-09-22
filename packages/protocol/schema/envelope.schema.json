@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentide.local/schema/envelope.schema.json",
+  "title": "AgentIDE Envelope",
+  "type": "object",
+  "required": ["version", "id", "type", "sourceDeviceId", "timestamp", "payload"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "type": {
+      "type": "string",
+      "pattern": "^(system|pairing|project|file|session|agent|interaction)\\.[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+    },
+    "sourceDeviceId": { "type": "string", "minLength": 1 },
+    "targetDeviceId": { "type": "string", "minLength": 1 },
+    "projectId": { "type": "string", "minLength": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" },
+    "payload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["encryptionVersion", "ciphertext"],
+          "properties": {
+            "encryptionVersion": { "const": 1 },
+            "ciphertext": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "not": {
+            "anyOf": [
+              { "type": "object", "required": ["encryptionVersion"] },
+              { "type": "object", "required": ["ciphertext"] }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

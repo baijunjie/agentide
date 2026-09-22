@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentide.local/schema/shared-types.schema.json",
+  "$defs": {
+    "project": {
+      "type": "object",
+      "required": ["id", "name", "rootPath", "createdAt", "enabledAgents"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "rootPath": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" },
+        "enabledAgents": { "type": "array", "items": { "enum": ["claude", "codex"] } }
+      },
+      "additionalProperties": false
+    },
+    "session": {
+      "type": "object",
+      "required": ["id", "projectId", "agentType", "title", "status", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "type": "string" },
+        "projectId": { "type": "string" },
+        "agentType": { "enum": ["claude", "codex"] },
+        "nativeSessionId": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "enum": ["starting", "running", "waiting_user", "completed", "failed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" },
+        "updatedAt": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" }
+      },
+      "additionalProperties": false
+    },
+    "fileEntry": {
+      "type": "object",
+      "required": ["name", "relativePath", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "relativePath": { "type": "string" },
+        "type": { "enum": ["file", "directory"] },
+        "size": { "type": "integer", "minimum": 0 },
+        "extension": { "type": "string" },
+        "isText": { "type": "boolean" },
+        "isImage": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

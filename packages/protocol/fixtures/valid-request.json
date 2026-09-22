@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "request-1",
+  "type": "project.list",
+  "sourceDeviceId": "iphone-1",
+  "targetDeviceId": "mac-1",
+  "timestamp": "2026-09-22T00:00:00.000Z",
+  "payload": {}
+}

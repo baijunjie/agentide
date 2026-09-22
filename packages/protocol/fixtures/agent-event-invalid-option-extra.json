@@ -1,0 +1,1 @@
+{ "id": "e1", "sessionId": "s1", "sequence": 1, "timestamp": "2026-09-22T00:00:00.000Z", "type": "question.requested", "interactionId": "i1", "question": "Choose", "options": [{ "id": "o1", "label": "One", "extra": true }], "allowFreeText": false }

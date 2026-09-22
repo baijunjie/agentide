@@ -1,0 +1,7 @@
+[
+  { "id": "e1", "sessionId": "s1", "sequence": 1, "timestamp": "2026-09-22T00:00:00.000Z", "type": "session.started", "nativeSessionId": null },
+  { "id": "e2", "sessionId": "s1", "sequence": 2, "timestamp": "2026-09-22T00:00:00.000Z", "type": "tool.started", "toolName": "read", "title": null },
+  { "id": "e3", "sessionId": "s1", "sequence": 3, "timestamp": "2026-09-22T00:00:00.000Z", "type": "command", "command": "test", "status": "completed", "exitCode": null },
+  { "id": "e4", "sessionId": "s1", "sequence": 4, "timestamp": "2026-09-22T00:00:00.000Z", "type": "question.requested", "interactionId": "i1", "question": "Choose", "options": null, "allowFreeText": true },
+  { "id": "e5", "sessionId": "s1", "sequence": 5, "timestamp": "2026-09-22T00:00:00.000Z", "type": "status", "status": "running", "message": null }
+]

@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "id": "request-1",
+  "type": "agent.event",
+  "sourceDeviceId": "mac-1",
+  "timestamp": "2026-09-22T00:00:00.000Z",
+  "payload": {}
+}

@@ -1,1 +1,9 @@
 .worktrees/
+.idea/
+.DS_Store
+node_modules/
+dist/
+.build/
+DerivedData/
+xcuserdata/
+*.xcuserstate

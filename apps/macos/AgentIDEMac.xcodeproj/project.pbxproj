@@ -8,11 +8,15 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* App.swift */; };
 		A10000000000000000000003 /* AgentIDEProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* AgentIDEProtocol */; };
+		A10000000000000000000015 /* MacViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* MacViews.swift */; };
+		A10000000000000000000017 /* MacSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* MacSupport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000002 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		A10000000000000000000005 /* AgentIDEMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentIDEMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000016 /* MacViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacViews.swift; sourceTree = "<group>"; };
+		A10000000000000000000018 /* MacSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSupport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -21,7 +25,7 @@
 
 /* Begin PBXGroup section */
 		A10000000000000000000007 = {isa = PBXGroup; children = (A10000000000000000000008 /* AgentIDEMac */, A10000000000000000000009 /* Products */,); sourceTree = "<group>"; };
-		A10000000000000000000008 /* AgentIDEMac */ = {isa = PBXGroup; children = (A10000000000000000000002 /* App.swift */,); path = AgentIDEMac; sourceTree = "<group>"; };
+		A10000000000000000000008 /* AgentIDEMac */ = {isa = PBXGroup; children = (A10000000000000000000002 /* App.swift */, A10000000000000000000016 /* MacViews.swift */, A10000000000000000000018 /* MacSupport.swift */,); path = AgentIDEMac; sourceTree = "<group>"; };
 		A10000000000000000000009 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000005 /* AgentIDEMac.app */,); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -38,7 +42,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* App.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		A1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* App.swift in Sources */, A10000000000000000000015 /* MacViews.swift in Sources */, A10000000000000000000017 /* MacSupport.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */

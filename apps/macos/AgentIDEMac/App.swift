@@ -1,3 +1,5 @@
+import AgentIDEProtocol
+import AppKit
 import CoreImage.CIFilterBuiltins
 import Security
 import SwiftUI
@@ -9,31 +11,36 @@ struct AgentIDEMacApp: App {
 }
 
 @MainActor
-private final class MacConnection: ObservableObject {
+final class MacConnection: ObservableObject {
     struct Pairing: Decodable { let expiresAt: String; let qrPayload: String; let secret: String }
     struct Device: Decodable, Identifiable { let id: String; let name: String; let online: Bool }
     struct DeviceList: Decodable { let devices: [Device] }
     struct Registration: Decodable { let token: String }
+    struct ProjectList: Decodable { let projects: [Project] }
+    struct FileList: Decodable { let entries: [FileEntry] }
+
     @Published var server = UserDefaults.standard.string(forKey: "relayServer") ?? "http://127.0.0.1:8787"
     @Published var pairing: Pairing?
     @Published var devices: [Device] = []
+    @Published var projects: [Project] = []
     @Published var error: String?
     @Published var connectionState = "Offline"
     private let deviceId: String
     private var token: String?
     private var socket: URLSessionWebSocketTask?
+    // TODO: Replace the development endpoint with the packaged companion-process endpoint before release.
+    private let agentHost = URL(string: "http://127.0.0.1:8788")!
 
     init() {
         if let id = UserDefaults.standard.string(forKey: "deviceId") { deviceId = id }
         else { let id = UUID().uuidString; deviceId = id; UserDefaults.standard.set(id, forKey: "deviceId") }
         token = CredentialStore.token(for: server)
-        if token != nil {
-            Task { [weak self] in
-                self?.connect()
-                await self?.refreshDevices()
-            }
+        Task { [weak self] in
+            await self?.refreshProjects()
+            if self?.token != nil { self?.connect(); await self?.refreshDevices() }
         }
     }
+
     func preparePairing() async {
         do {
             guard let relayURL = URL(string: server), isSecure(relayURL) else { throw URLError(.secureConnectionFailed) }
@@ -41,119 +48,144 @@ private final class MacConnection: ObservableObject {
             token = CredentialStore.token(for: server)
             if token == nil {
                 let body = ["deviceId": deviceId, "name": Host.current().localizedName ?? "Mac", "kind": "mac"]
-                let registration: Registration = try await request("/devices/register", method: "POST", body: body, authenticated: false)
+                let registration: Registration = try await relayRequest("/devices/register", method: "POST", body: body, authenticated: false)
                 token = registration.token; CredentialStore.save(registration.token, for: server)
             }
-            pairing = try await request("/pairing/sessions", method: "POST", body: [String: String](), authenticated: true)
+            pairing = try await relayRequest("/pairing/sessions", method: "POST", body: [String: String](), authenticated: true)
             connect(); await refreshDevices()
         } catch { self.error = error.localizedDescription }
     }
+
     func refreshDevices() async {
-        do { let list: DeviceList = try await request("/devices", method: "GET", body: Optional<String>.none, authenticated: true); devices = list.devices; connectionState = "Connected" }
-        catch { self.error = error.localizedDescription; connectionState = "Offline" }
-    }
-    func revoke(_ device: Device) async {
         do {
-            let _: EmptyResponse = try await request("/devices/\(device.id)", method: "DELETE", body: Optional<String>.none, authenticated: true)
-            await refreshDevices()
+            let list: DeviceList = try await relayRequest("/devices", method: "GET", body: Optional<String>.none, authenticated: true)
+            devices = list.devices
         } catch { self.error = error.localizedDescription }
     }
+
+    func revoke(_ device: Device) async {
+        do { let _: EmptyResponse = try await relayRequest("/devices/\(device.id)", method: "DELETE", body: Optional<String>.none, authenticated: true); await refreshDevices() }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func addProject() async {
+        let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { let _: Project = try await hostRequest("/projects", method: "POST", body: ["rootPath": url.path]); await refreshProjects() }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func renameProject(_ project: Project, name: String) async {
+        do { let _: Project = try await hostRequest("/projects/\(project.id)", method: "PATCH", body: ["name": name]); await refreshProjects() }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func removeProject(_ project: Project) async {
+        do { let _: EmptyResponse = try await hostRequest("/projects/\(project.id)", method: "DELETE", body: Optional<String>.none); await refreshProjects() }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func refreshProjects() async {
+        do { projects = try await loadProjects() }
+        catch { self.error = "Agent Host: \(error.localizedDescription)" }
+    }
+
     private func connect() {
         guard let token, var parts = URLComponents(string: server) else { return }
         connectionState = "Connecting"
         parts.scheme = parts.scheme == "https" ? "wss" : "ws"; parts.path = "/connect"; parts.queryItems = [.init(name: "deviceId", value: deviceId)]
         guard let url = parts.url else { return }; var request = URLRequest(url: url); request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        socket?.cancel()
-        let task = URLSession.shared.webSocketTask(with: request)
-        socket = task
-        task.resume()
+        socket?.cancel(); let task = URLSession.shared.webSocketTask(with: request); socket = task; task.resume()
+        task.sendPing { [weak self, weak task] error in Task { @MainActor in
+            guard let self, let task, self.socket === task else { return }
+            self.connectionState = error == nil ? "Connected" : "Offline"
+        } }
         receive(task)
     }
+
     private func receive(_ task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in Task { @MainActor in
-            guard let self else { return }
-            guard self.socket === task else { return }
-            if case .success = result { await self.refreshDevices(); self.receive(task) }
-            else { self.connectionState = "Offline"; try? await Task.sleep(for: .seconds(1)); guard self.socket === task else { return }; self.connect() }
+            guard let self, self.socket === task else { return }
+            switch result {
+            case let .success(message):
+                self.connectionState = "Connected"
+                let data: Data? = switch message { case let .data(value): value; case let .string(value): Data(value.utf8); @unknown default: nil }
+                if let data { await self.handleRelayMessage(data) }
+                self.receive(task)
+            case .failure:
+                self.connectionState = "Offline"; try? await Task.sleep(for: .seconds(1)); guard self.socket === task else { return }; self.connect()
+            }
         } }
     }
-    private func request<Response: Decodable, Body: Encodable>(_ path: String, method: String, body: Body?, authenticated: Bool) async throws -> Response {
+
+    private func handleRelayMessage(_ data: Data) async {
+        guard let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let type = message["type"] as? String else { return }
+        if type == "system.presence" { await refreshDevices(); return }
+        guard let requestId = message["id"] as? String, let source = message["sourceDeviceId"] as? String else { return }
+        if type == "project.list" {
+            do {
+                projects = try await loadProjects()
+                sendResponse(to: source, replyTo: requestId, type: "project.list.response", payload: ["projects": projects.map(publicProject)])
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "project.list.response", error: error.localizedDescription)
+            }
+        } else if type == "project.listFiles", let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any], let path = payload["relativePath"] as? String {
+            do {
+                let list: FileList = try await hostRequest("/projects/\(projectId)/files/list", method: "POST", body: ["relativePath": path])
+                let entries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(list.entries))
+                sendResponse(to: source, replyTo: requestId, type: "project.listFiles.response", projectId: projectId, payload: ["relativePath": path, "entries": entries])
+            } catch { sendResponse(to: source, replyTo: requestId, type: "project.listFiles.response", projectId: projectId, error: error.localizedDescription) }
+        }
+    }
+
+    private func publicProject(_ project: Project) -> [String: Any] {
+        ["id": project.id, "name": project.name, "createdAt": project.createdAt, "enabledAgents": project.enabledAgents.map(\.rawValue), "online": connectionState == "Connected"]
+    }
+
+    private func loadProjects() async throws -> [Project] {
+        let list: ProjectList = try await hostRequest("/projects", method: "GET", body: Optional<String>.none)
+        return list.projects
+    }
+
+    private func sendResponse(to target: String, replyTo: String, type: String, projectId: String? = nil, payload: [String: Any]? = nil, error: String? = nil) {
+        var value: [String: Any] = ["version": 1, "id": UUID().uuidString, "type": type, "sourceDeviceId": deviceId, "targetDeviceId": target,
+                                    "timestamp": ISO8601DateFormatter().string(from: Date()), "replyTo": replyTo, "ok": error == nil]
+        if let projectId { value["projectId"] = projectId }
+        if let error {
+            value["payload"] = NSNull()
+            value["error"] = ["code": "project_request_failed", "message": error]
+        } else if let payload { value["payload"] = payload }
+        guard let data = try? JSONSerialization.data(withJSONObject: value), let text = String(data: data, encoding: .utf8) else { return }
+        socket?.send(.string(text)) { _ in }
+    }
+
+    private func relayRequest<Response: Decodable, Body: Encodable>(_ path: String, method: String, body: Body?, authenticated: Bool) async throws -> Response {
         guard let base = URL(string: server), let url = URL(string: path, relativeTo: base) else { throw URLError(.badURL) }
         var request = URLRequest(url: url); request.httpMethod = method
         if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if authenticated, let token { request.setValue(deviceId, forHTTPHeaderField: "X-Device-Id"); request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        return try await perform(request)
+    }
+
+    private func hostRequest<Response: Decodable, Body: Encodable>(_ path: String, method: String, body: Body?) async throws -> Response {
+        guard let url = URL(string: path, relativeTo: agentHost) else { throw URLError(.badURL) }
+        var request = URLRequest(url: url); request.httpMethod = method
+        if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        return try await perform(request)
+    }
+
+    private func perform<Response: Decodable>(_ request: URLRequest) async throws -> Response {
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw URLError(.userAuthenticationRequired) }
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            let message = (try? JSONDecoder().decode(ErrorResponse.self, from: data).error) ?? "Request failed"
+            throw NSError(domain: "AgentIDE", code: (response as? HTTPURLResponse)?.statusCode ?? -1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
         if Response.self == EmptyResponse.self { return EmptyResponse() as! Response }
         return try JSONDecoder().decode(Response.self, from: data)
     }
 }
 
 private struct EmptyResponse: Codable {}
-
-private func isSecure(_ url: URL) -> Bool {
-    url.scheme == "https" || (url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost"))
-}
-
-private struct MacHomeView: View {
-    @EnvironmentObject private var connection: MacConnection
-    var body: some View {
-        NavigationSplitView {
-            List {
-                Label("Pairing", systemImage: "link")
-                // TODO: Replace this placeholder with the registered project overview in milestone 03.
-                Label("Projects", systemImage: "folder")
-            }.navigationTitle("AgentIDE")
-        } detail: {
-            VStack(spacing: 18) {
-                Text("Pair iPhone").font(.largeTitle.bold())
-                Label(connection.connectionState, systemImage: connection.connectionState == "Connected" ? "network" : "network.slash")
-                TextField("Relay server", text: $connection.server).textFieldStyle(.roundedBorder).frame(maxWidth: 420)
-                if let pairing = connection.pairing {
-                    QRCode(value: pairing.qrPayload).frame(width: 220, height: 220)
-                    Text(pairing.secret.prefix(8)).font(.system(.title2, design: .monospaced)).textSelection(.enabled)
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        let expiry = ISO8601DateFormatter().date(from: pairing.expiresAt) ?? context.date
-                        Text("Expires in \(max(0, Int(expiry.timeIntervalSince(context.date)))) seconds").foregroundStyle(.secondary)
-                    }
-                }
-                Button(connection.pairing == nil ? "Create Pairing Code" : "Refresh Pairing Code") { Task { await connection.preparePairing() } }.buttonStyle(.borderedProminent)
-                ForEach(connection.devices) { device in
-                    HStack {
-                        Label("\(device.name) — \(device.online ? "Connected" : "Offline")", systemImage: device.online ? "iphone.radiowaves.left.and.right" : "iphone.slash")
-                        Button("Revoke") { Task { await connection.revoke(device) } }
-                    }
-                }
-                if let error = connection.error { Text(error).foregroundStyle(.red) }
-            }.padding(36)
-        }.frame(minWidth: 760, minHeight: 560)
-    }
-}
-
-private enum CredentialStore {
-    static func token(for server: String) -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.agentide.relay", kSecAttrAccount as String: key(for: server), kSecReturnData as String: true]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-    static func save(_ token: String, for server: String) {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.agentide.relay", kSecAttrAccount as String: key(for: server)]
-        SecItemDelete(query as CFDictionary)
-        var value = query; value[kSecValueData as String] = Data(token.utf8); SecItemAdd(value as CFDictionary, nil)
-    }
-    private static func key(for server: String) -> String {
-        guard let parts = URLComponents(string: server), let scheme = parts.scheme, let host = parts.host else { return server }
-        return "\(scheme.lowercased())://\(host.lowercased())\(parts.port.map { ":\($0)" } ?? "")"
-    }
-}
-
-private struct QRCode: View {
-    let value: String
-    var body: some View { if let image { Image(nsImage: image).interpolation(.none).resizable() } else { Color.secondary } }
-    private var image: NSImage? {
-        let filter = CIFilter.qrCodeGenerator(); filter.message = Data(value.utf8)
-        guard let output = filter.outputImage?.transformed(by: .init(scaleX: 10, y: 10)), let cgImage = CIContext().createCGImage(output, from: output.extent) else { return nil }
-        return NSImage(cgImage: cgImage, size: .zero)
-    }
-}
+private struct ErrorResponse: Decodable { let error: String }
+private func isSecure(_ url: URL) -> Bool { url.scheme == "https" || (url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost")) }

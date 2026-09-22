@@ -6,10 +6,15 @@ export {
   ReconnectingRelayClient,
   type RelayClientOptions,
 } from "./relay-client.js";
+export { LocalFileService } from "./file-service.js";
+export { createAgentHostServer } from "./ipc-server.js";
+export { ProjectStore } from "./project-store.js";
 
 export interface FileService {
   list(projectId: string, relativePath: string): Promise<FileEntry[]>;
-  read(projectId: string, relativePath: string): Promise<Uint8Array>;
+  readText(projectId: string, relativePath: string): Promise<string>;
+  readBinary(projectId: string, relativePath: string): Promise<Uint8Array>;
+  listSiblingImages(projectId: string, relativePath: string): Promise<FileEntry[]>;
 }
 
 export interface RelayClient {

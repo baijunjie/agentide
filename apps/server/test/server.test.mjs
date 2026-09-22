@@ -127,6 +127,22 @@ test("paired websocket devices receive presence and routed envelopes", async (co
   mac.send(JSON.stringify(envelope));
   assert.deepEqual(await nextMessage(ios), envelope);
 
+  const fileError = {
+    version: 1,
+    id: "route-error-1",
+    type: "project.listFiles.response",
+    sourceDeviceId: "mac-1",
+    targetDeviceId: "ios-1",
+    projectId: "missing-project",
+    timestamp: new Date().toISOString(),
+    replyTo: "file-request-1",
+    ok: false,
+    payload: null,
+    error: { code: "project_request_failed", message: "Project not found" },
+  };
+  mac.send(JSON.stringify(fileError));
+  assert.deepEqual(await nextMessage(ios), fileError);
+
   const closed = new Promise((resolve) => ios.once("close", resolve));
   const revoke = await fetch(`${base}/devices/ios-1`, {
     method: "DELETE",

@@ -11,7 +11,7 @@
     "ws": "^8.21.3"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && mkdir -p dist/native && cc -Wall -Wextra -Werror native/file-access.c -o dist/native/file-access",
     "check": "tsc -b --pretty false",
     "start": "node dist/main.js",
     "test": "node --test"

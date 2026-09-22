@@ -7,8 +7,8 @@
 
 - 最终建立了 pnpm TypeScript workspace、两个独立 SwiftUI Xcode 应用、Relay Server、本地 Agent Host 进程边界与 Swift 协议包。协议的 TypeScript 运行时校验、Draft 2020-12 JSON Schema 和 Swift DTO 共用同一组正反 fixtures。
 - `ResponseEnvelope.payload` 按本文契约保持可选；时间戳收紧为 UTC `Z` 时区的 RFC 3339 子集，避免 JavaScript 与 Foundation 日期解析器的宽松规则不一致。显式 JSON `null` 在 response payload、tool input/output 和 error details 中可无损往返。
-- 刻意保留的过渡层：`agent-codex` 和 `agent-claude` 当前只有包边界，分别由里程碑 05 和 06 替换；Agent Host 当前只有健康检查 bootstrap 与依赖接口，由里程碑 02、03、05、06 逐步接入 Relay、File Service 和 Adapter；macOS/iOS 当前为可编译的占位界面，由里程碑 02、03、07 接入真实状态。这些位置已在代码中标注 `TODO`。
-- 交给后续里程碑的账：Relay 尚未实现配对、长连接与设备路由；File Service 只有接口；两个 Agent 包尚未连接原生 SDK/结构化协议；两个 Apple 应用尚未读取在线设备、项目、文件或会话数据。
+- 刻意保留的过渡层：`agent-codex` 和 `agent-claude` 当前只有包边界，分别由里程碑 05 和 06 替换；Agent Host 的项目登记、文件服务与 Mac 本地 IPC 已由里程碑 03 接入，Adapter 仍由里程碑 05、06 接入；macOS/iOS 已接入配对、项目和文件树真实状态，会话界面由里程碑 07 接入。剩余位置已在代码中标注 `TODO`。
+- 交给后续里程碑的账：两个 Agent 包尚未连接原生 SDK/结构化协议；两个 Apple 应用尚未读取或呈现会话数据。Relay 配对、长连接与设备路由，以及项目与文件浏览已由里程碑 02、03 完成。
 - 已验证 `pnpm check`、`pnpm build`、全部 Node 测试、Swift Package 测试、macOS Xcode build、iOS Simulator generic build、Relay 回环请求与 Agent Host 独立进程启动。未手工操作 macOS/iOS 界面，未在真机启动 iOS，也未在 GitHub 远端实际触发 CI。
 
 ## 技术设计

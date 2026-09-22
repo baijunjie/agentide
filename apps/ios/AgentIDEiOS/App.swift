@@ -1,6 +1,8 @@
 import AVFoundation
+import AgentIDEProtocol
 import Security
 import SwiftUI
+import UIKit
 
 @main
 struct AgentIDEiOSApp: App {
@@ -9,20 +11,37 @@ struct AgentIDEiOSApp: App {
 }
 
 private struct PairingPayload: Codable { let version: Int; let server: String; let pairingId: String; let secret: String }
+struct RemoteProject: Codable, Identifiable {
+    let id: String
+    let name: String
+    let createdAt: String
+    let enabledAgents: [AgentType]
+    let online: Bool
+}
+private struct ProjectListPayload: Decodable { let projects: [RemoteProject] }
+private struct FileListPayload: Decodable { let relativePath: String; let entries: [FileEntry] }
 
 @MainActor
-private final class MobileConnection: ObservableObject {
+final class MobileConnection: ObservableObject {
     struct Claim: Decodable { let token: String }
     @Published var online = false
     @Published var paired = false
+    @Published var projects: [RemoteProject] = []
+    @Published var files: [String: [FileEntry]] = [:]
+    @Published var loadingPaths: Set<String> = []
     @Published var error: String?
     private let deviceId: String
+    private var macDeviceId: String?
     private var socket: URLSessionWebSocketTask?
+
     init() {
         if let id = UserDefaults.standard.string(forKey: "deviceId") { deviceId = id }
         else { let id = UUID().uuidString; deviceId = id; UserDefaults.standard.set(id, forKey: "deviceId") }
-        if let server = UserDefaults.standard.string(forKey: "relayServer"), let token = CredentialStore.token(for: server) { paired = true; connect(server: server, token: token) }
+        if let server = UserDefaults.standard.string(forKey: "relayServer"), let token = CredentialStore.token(for: server) {
+            paired = true; connect(server: server, token: token)
+        }
     }
+
     func claim(qrValue: String) async {
         do {
             let payload = try JSONDecoder().decode(PairingPayload.self, from: Data(qrValue.utf8))
@@ -36,97 +55,80 @@ private final class MobileConnection: ObservableObject {
             connect(server: payload.server, token: claim.token)
         } catch { self.error = error.localizedDescription }
     }
+
+    func requestProjects() {
+        guard let macDeviceId else { return }
+        send(type: "project.list", target: macDeviceId, payload: [:])
+    }
+
+    func requestFiles(projectId: String, relativePath: String) {
+        guard let macDeviceId else { return }
+        let key = fileKey(projectId: projectId, path: relativePath)
+        loadingPaths.insert(key)
+        send(type: "project.listFiles", target: macDeviceId, projectId: projectId, payload: ["relativePath": relativePath])
+    }
+
+    func entries(projectId: String, path: String) -> [FileEntry]? { files[fileKey(projectId: projectId, path: path)] }
+    func isLoading(projectId: String, path: String) -> Bool { loadingPaths.contains(fileKey(projectId: projectId, path: path)) }
+
     private func connect(server: String, token: String) {
         guard var parts = URLComponents(string: server) else { return }
         parts.scheme = parts.scheme == "https" ? "wss" : "ws"; parts.path = "/connect"; parts.queryItems = [.init(name: "deviceId", value: deviceId)]
         guard let url = parts.url else { return }; var request = URLRequest(url: url); request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        socket?.cancel()
-        let task = URLSession.shared.webSocketTask(with: request)
-        socket = task
-        task.resume()
-        receive(task, server: server, token: token)
+        socket?.cancel(); let task = URLSession.shared.webSocketTask(with: request); socket = task; task.resume(); receive(task, server: server, token: token)
     }
+
     private func receive(_ task: URLSessionWebSocketTask, server: String, token: String) {
         task.receive { [weak self] result in Task { @MainActor in
-            guard let self else { return }
-            guard self.socket === task else { return }
+            guard let self, self.socket === task else { return }
             switch result {
             case let .success(message):
                 let data: Data? = switch message { case let .data(value): value; case let .string(value): Data(value.utf8); @unknown default: nil }
-                if let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], json["type"] as? String == "system.presence", let payload = json["payload"] as? [String: Any] { self.online = payload["online"] as? Bool ?? false }
+                if let data { self.handle(data) }
                 self.receive(task, server: server, token: token)
             case .failure:
                 self.online = false
                 if task.closeCode.rawValue == 4003 {
-                    CredentialStore.delete(for: server); self.paired = false; self.socket = nil; return
+                    CredentialStore.delete(for: server); self.paired = false; self.projects = []; self.files = [:]; self.socket = nil; return
                 }
                 try? await Task.sleep(for: .seconds(1)); guard self.socket === task else { return }; self.connect(server: server, token: token)
             }
         } }
     }
-}
 
-private struct MobileHomeView: View {
-    @EnvironmentObject private var connection: MobileConnection
-    @State private var scanning = false
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 24) {
-                Image(systemName: connection.online ? "desktopcomputer.and.macbook" : "desktopcomputer").font(.system(size: 72)).foregroundStyle(connection.online ? .green : .secondary)
-                Text(!connection.paired ? "No Mac paired" : connection.online ? "Mac Online" : "Mac Offline").font(.title.bold())
-                Button("Scan Pairing QR") { scanning = true }.buttonStyle(.borderedProminent)
-                if let error = connection.error { Text(error).foregroundStyle(.red) }
-            }.navigationTitle("AgentIDE").sheet(isPresented: $scanning) {
-                QRScanner { value in scanning = false; Task { await connection.claim(qrValue: value) } }.ignoresSafeArea()
-            }
+    private func handle(_ data: Data) {
+        guard let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let type = message["type"] as? String else { return }
+        if type == "system.presence", let payload = message["payload"] as? [String: Any] {
+            online = payload["online"] as? Bool ?? false
+            macDeviceId = message["sourceDeviceId"] as? String
+            if online { requestProjects() }
+            return
+        }
+        if message["ok"] as? Bool == false {
+            error = (message["error"] as? [String: Any])?["message"] as? String ?? "Project request failed"
+            loadingPaths.removeAll()
+            return
+        }
+        guard let payload = message["payload"], JSONSerialization.isValidJSONObject(payload),
+              let payloadData = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        if type == "project.list.response", let response = try? JSONDecoder().decode(ProjectListPayload.self, from: payloadData) {
+            projects = response.projects
+        } else if type == "project.listFiles.response", let projectId = message["projectId"] as? String,
+                  let response = try? JSONDecoder().decode(FileListPayload.self, from: payloadData) {
+            let key = fileKey(projectId: projectId, path: response.relativePath)
+            files[key] = response.entries; loadingPaths.remove(key)
         }
     }
+
+    private func send(type: String, target: String, projectId: String? = nil, payload: [String: Any]) {
+        var message: [String: Any] = ["version": 1, "id": UUID().uuidString, "type": type, "sourceDeviceId": deviceId,
+                                      "targetDeviceId": target, "timestamp": ISO8601DateFormatter().string(from: Date()), "payload": payload]
+        if let projectId { message["projectId"] = projectId }
+        guard let data = try? JSONSerialization.data(withJSONObject: message), let text = String(data: data, encoding: .utf8) else { return }
+        socket?.send(.string(text)) { _ in }
+    }
+
+    private func fileKey(projectId: String, path: String) -> String { "\(projectId):\(path)" }
 }
 
-private func isSecure(_ url: URL) -> Bool {
-    url.scheme == "https" || (url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost"))
-}
-
-private enum CredentialStore {
-    static func token(for server: String) -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.agentide.relay", kSecAttrAccount as String: key(for: server), kSecReturnData as String: true]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-    static func save(_ token: String, for server: String) {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.agentide.relay", kSecAttrAccount as String: key(for: server)]
-        SecItemDelete(query as CFDictionary)
-        var value = query; value[kSecValueData as String] = Data(token.utf8); SecItemAdd(value as CFDictionary, nil)
-    }
-    static func delete(for server: String) {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.agentide.relay", kSecAttrAccount as String: key(for: server)]
-        SecItemDelete(query as CFDictionary)
-    }
-    private static func key(for server: String) -> String {
-        guard let parts = URLComponents(string: server), let scheme = parts.scheme, let host = parts.host else { return server }
-        return "\(scheme.lowercased())://\(host.lowercased())\(parts.port.map { ":\($0)" } ?? "")"
-    }
-}
-
-private struct QRScanner: UIViewControllerRepresentable {
-    let onCode: (String) -> Void
-    func makeUIViewController(context: Context) -> ScannerController { let controller = ScannerController(); controller.onCode = onCode; return controller }
-    func updateUIViewController(_ controller: ScannerController, context: Context) {}
-}
-
-private final class ScannerController: UIViewController, @preconcurrency AVCaptureMetadataOutputObjectsDelegate {
-    var onCode: ((String) -> Void)?
-    private let session = AVCaptureSession()
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        guard let camera = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: camera), session.canAddInput(input) else { return }
-        session.addInput(input); let output = AVCaptureMetadataOutput(); guard session.canAddOutput(output) else { return }; session.addOutput(output)
-        output.setMetadataObjectsDelegate(self, queue: .main); output.metadataObjectTypes = [.qr]
-        let preview = AVCaptureVideoPreviewLayer(session: session); preview.videoGravity = .resizeAspectFill; preview.frame = view.bounds; view.layer.addSublayer(preview)
-        DispatchQueue.global(qos: .userInitiated).async { self.session.startRunning() }
-    }
-    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject], from connection: AVCaptureConnection) {
-        guard let value = (objects.first as? AVMetadataMachineReadableCodeObject)?.stringValue else { return }; session.stopRunning(); onCode?(value)
-    }
-}
+private func isSecure(_ url: URL) -> Bool { url.scheme == "https" || (url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost")) }

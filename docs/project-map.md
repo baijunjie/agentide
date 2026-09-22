@@ -6,10 +6,10 @@
 
 | 路径 | 职责 |
 | --- | --- |
-| `apps/macos/` | macOS SwiftUI 客户端，持有 Mac 设备身份与 Relay 连接，生成配对二维码并管理已配对 iPhone；通过本地 Swift Package 依赖统一协议 DTO。 |
-| `apps/ios/` | iOS SwiftUI 客户端，扫描二维码完成设备绑定，持有 iPhone 设备身份与 Relay 连接并显示 Mac 在线状态；通过本地 Swift Package 依赖统一协议 DTO。 |
+| `apps/macos/` | macOS SwiftUI 客户端，持有 Mac 设备身份与唯一 Relay 连接，管理配对设备和本机登记项目，并把 iPhone 的项目与目录请求转交本地 Agent Host；通过本地 Swift Package 依赖统一协议 DTO。 |
+| `apps/ios/` | iOS SwiftUI 客户端，扫描二维码完成设备绑定，显示 Mac 与项目在线状态，并按需浏览已登记项目的文件树；通过本地 Swift Package 依赖统一协议 DTO。 |
 | `apps/server/` | Node.js Relay Server，使用 PostgreSQL 持久化设备、配对会话与绑定，负责鉴权、Presence、心跳、绑定内 Envelope 路由和短时断线缓冲，不解释业务 payload。 |
-| `apps/agent-host/` | Mac 本地独立进程边界，组合 Agent Adapter、文件服务和 Relay 连接，并提供可复用的有界缓冲重连客户端。 |
+| `apps/agent-host/` | Mac 本地独立进程边界，持久化项目登记，通过 native no-follow helper 提供受项目根目录约束的文件访问与本地 HTTP IPC，并保留 Agent Adapter 和可复用 Relay 客户端的组合边界。 |
 
 ## 共享包
 

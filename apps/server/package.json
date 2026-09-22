@@ -5,12 +5,18 @@
   "type": "module",
   "main": "dist/index.js",
   "dependencies": {
-    "@agentide/protocol": "workspace:*"
+    "@agentide/protocol": "workspace:*",
+    "pg": "^8.23.0",
+    "ws": "^8.21.3"
   },
   "scripts": {
     "build": "tsc -b",
     "check": "tsc -b --pretty false",
     "start": "node dist/index.js",
     "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.1"
   }
 }

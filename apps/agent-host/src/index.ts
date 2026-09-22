@@ -2,6 +2,11 @@ import type { AgentAdapter } from "@agentide/agent-core";
 import type { Envelope } from "@agentide/protocol";
 import type { FileEntry } from "@agentide/shared-types";
 
+export {
+  ReconnectingRelayClient,
+  type RelayClientOptions,
+} from "./relay-client.js";
+
 export interface FileService {
   list(projectId: string, relativePath: string): Promise<FileEntry[]>;
   read(projectId: string, relativePath: string): Promise<Uint8Array>;

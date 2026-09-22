@@ -7,12 +7,16 @@
   "dependencies": {
     "@agentide/agent-core": "workspace:*",
     "@agentide/protocol": "workspace:*",
-    "@agentide/shared-types": "workspace:*"
+    "@agentide/shared-types": "workspace:*",
+    "ws": "^8.21.3"
   },
   "scripts": {
     "build": "tsc -b",
     "check": "tsc -b --pretty false",
     "start": "node dist/main.js",
     "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }

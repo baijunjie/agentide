@@ -30,4 +30,3 @@
 | 路径 | 职责 |
 | --- | --- |
 | `package.json`、`pnpm-workspace.yaml`、`tsconfig.base.json` | pnpm workspace、统一构建命令和 TypeScript 严格编译基线。 |
-| `.github/workflows/ci.yml` | 在 macOS runner 上校验、构建并测试 Node/TypeScript 包、Swift 协议包及两个 Apple 客户端。 |

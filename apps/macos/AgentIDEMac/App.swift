@@ -4,6 +4,8 @@ import CoreImage.CIFilterBuiltins
 import Security
 import SwiftUI
 
+private let maxRelayMessageBytes = 1024 * 1024
+
 @main
 struct AgentIDEMacApp: App {
     @StateObject private var connection = MacConnection()
@@ -18,6 +20,7 @@ final class MacConnection: ObservableObject {
     struct Registration: Decodable { let token: String }
     struct ProjectList: Decodable { let projects: [Project] }
     struct FileList: Decodable { let entries: [FileEntry] }
+    struct FileContent: Decodable { let content: String }
 
     @Published var server = UserDefaults.standard.string(forKey: "relayServer") ?? "http://127.0.0.1:8787"
     @Published var pairing: Pairing?
@@ -129,13 +132,46 @@ final class MacConnection: ObservableObject {
             } catch {
                 sendResponse(to: source, replyTo: requestId, type: "project.list.response", error: error.localizedDescription)
             }
-        } else if type == "project.listFiles", let projectId = message["projectId"] as? String,
-                  let payload = message["payload"] as? [String: Any], let path = payload["relativePath"] as? String {
+        } else if type == "project.listFiles" {
+            guard let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any], let path = payload["relativePath"] as? String else {
+                sendResponse(to: source, replyTo: requestId, type: "project.listFiles.response", error: "Invalid project.listFiles request")
+                return
+            }
             do {
                 let list: FileList = try await hostRequest("/projects/\(projectId)/files/list", method: "POST", body: ["relativePath": path])
                 let entries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(list.entries))
                 sendResponse(to: source, replyTo: requestId, type: "project.listFiles.response", projectId: projectId, payload: ["relativePath": path, "entries": entries])
             } catch { sendResponse(to: source, replyTo: requestId, type: "project.listFiles.response", projectId: projectId, error: error.localizedDescription) }
+        } else if type == "project.readFile" {
+            guard let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any], let path = payload["relativePath"] as? String,
+                  let encoding = payload["encoding"] as? String, encoding == "utf8" || encoding == "base64" else {
+                sendResponse(to: source, replyTo: requestId, type: "project.readFile.response", error: "Invalid project.readFile request")
+                return
+            }
+            do {
+                let operation = encoding == "base64" ? "read-binary" : "read-text"
+                let file: FileContent = try await hostRequest("/projects/\(projectId)/files/\(operation)", method: "POST", body: ["relativePath": path])
+                sendResponse(to: source, replyTo: requestId, type: "project.readFile.response", projectId: projectId,
+                             payload: ["relativePath": path, "encoding": encoding, "content": file.content])
+            } catch { sendResponse(to: source, replyTo: requestId, type: "project.readFile.response", projectId: projectId, error: error.localizedDescription) }
+        } else if type == "project.listImages" {
+            guard let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any], let path = payload["relativePath"] as? String else {
+                sendResponse(to: source, replyTo: requestId, type: "project.listImages.response", error: "Invalid project.listImages request")
+                return
+            }
+            do {
+                let list: FileList = try await hostRequest("/projects/\(projectId)/files/list-images", method: "POST", body: ["relativePath": path])
+                guard let current = list.entries.first(where: { $0.relativePath == path }) else {
+                    throw NSError(domain: "AgentIDE", code: 404, userInfo: [NSLocalizedDescriptionKey: "Image not found"])
+                }
+                let currentValue = try JSONSerialization.jsonObject(with: JSONEncoder().encode(current))
+                let siblingValues = try JSONSerialization.jsonObject(with: JSONEncoder().encode(list.entries))
+                sendResponse(to: source, replyTo: requestId, type: "project.listImages.response", projectId: projectId,
+                             payload: ["current": currentValue, "siblings": siblingValues])
+            } catch { sendResponse(to: source, replyTo: requestId, type: "project.listImages.response", projectId: projectId, error: error.localizedDescription) }
         }
     }
 
@@ -156,7 +192,15 @@ final class MacConnection: ObservableObject {
             value["payload"] = NSNull()
             value["error"] = ["code": "project_request_failed", "message": error]
         } else if let payload { value["payload"] = payload }
-        guard let data = try? JSONSerialization.data(withJSONObject: value), let text = String(data: data, encoding: .utf8) else { return }
+        guard var data = try? JSONSerialization.data(withJSONObject: value) else { return }
+        if data.count > maxRelayMessageBytes {
+            value["ok"] = false
+            value["payload"] = NSNull()
+            value["error"] = ["code": "project_request_failed", "message": "Project response is too large"]
+            guard let fallback = try? JSONSerialization.data(withJSONObject: value) else { return }
+            data = fallback
+        }
+        guard let text = String(data: data, encoding: .utf8) else { return }
         socket?.send(.string(text)) { _ in }
     }
 

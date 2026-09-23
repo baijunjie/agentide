@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createAgentHostServer, LocalFileService, ProjectStore } from "../dist/index.js";
 
@@ -174,9 +177,11 @@ test("registered root ancestors are opened without following replacement symlink
   assert.equal(results.every((value) => value === "inside" || value === "rejected"), true);
 });
 
-test("local IPC exposes project management and only the listed file operation", async (context) => {
+test("local IPC exposes project management and safe file operations", async (context) => {
   const fixture = await createFixture(context);
   await writeFile(join(fixture.root, "README.md"), "# Project\n");
+  await writeFile(join(fixture.root, "cover.png"), Buffer.from([1, 2, 3]));
+  await writeFile(join(fixture.root, "oversized.txt"), Buffer.alloc(700 * 1024 + 1));
   const server = createAgentHostServer(new ProjectStore(fixture.storePath, ""));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(() => new Promise((resolve) => server.close(resolve)));
@@ -189,7 +194,19 @@ test("local IPC exposes project management and only the listed file operation", 
   const projects = await jsonRequest(`${base}/projects`, "GET");
   assert.equal(projects.projects[0].id, created.id);
   const files = await jsonRequest(`${base}/projects/${created.id}/files/list`, "POST", { relativePath: "" });
-  assert.deepEqual(files.entries.map((entry) => entry.relativePath), ["README.md"]);
+  assert.deepEqual(files.entries.map((entry) => entry.relativePath), ["cover.png", "oversized.txt", "README.md"]);
+  const text = await jsonRequest(`${base}/projects/${created.id}/files/read-text`, "POST", { relativePath: "README.md" });
+  assert.equal(text.content, "# Project\n");
+  const binary = await jsonRequest(`${base}/projects/${created.id}/files/read-binary`, "POST", { relativePath: "cover.png" });
+  assert.equal(binary.content, Buffer.from([1, 2, 3]).toString("base64"));
+  const images = await jsonRequest(`${base}/projects/${created.id}/files/list-images`, "POST", { relativePath: "cover.png" });
+  assert.deepEqual(images.entries.map((entry) => entry.relativePath), ["cover.png"]);
+  const oversized = await fetch(`${base}/projects/${created.id}/files/read-text`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ relativePath: "oversized.txt" }),
+  });
+  assert.equal(oversized.status, 400);
 
   const escaped = await fetch(`${base}/projects/${created.id}/files/list`, {
     method: "POST",
@@ -197,6 +214,26 @@ test("local IPC exposes project management and only the listed file operation", 
     body: JSON.stringify({ relativePath: ".." }),
   });
   assert.equal(escaped.status, 400);
+});
+
+test("native reads enforce the byte limit when a file grows after opening", async (context) => {
+  const fixture = await createFixture(context);
+  const path = join(fixture.root, "growing.txt");
+  await writeFile(path, Buffer.alloc(700 * 1024));
+  const helper = fileURLToPath(new URL("../dist/native/file-access", import.meta.url));
+  const process = spawn(helper, ["read", fixture.root, "growing.txt"], { stdio: ["ignore", "pipe", "pipe"] });
+  const closed = once(process, "close");
+  process.stdout.pause();
+  while (process.stdout.readableLength === 0 && process.exitCode === null) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await appendFile(path, Buffer.alloc(64 * 1024));
+  let outputBytes = 0;
+  process.stdout.on("data", (chunk) => { outputBytes += chunk.length; });
+  process.stdout.resume();
+  const [code] = await closed;
+  assert.equal(code, 1);
+  assert.equal(outputBytes <= 700 * 1024, true);
 });
 
 async function createFixture(context) {

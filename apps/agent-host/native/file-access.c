@@ -7,6 +7,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+// Binary payloads are base64-wrapped in a 1 MiB Relay frame, so raw reads need headroom for the envelope.
+#define MAX_READ_BYTES (700 * 1024)
+
 static int forbidden_component(const char *name) {
   return strcmp(name, "") == 0 || strcmp(name, ".") == 0 || strcmp(name, "..") == 0 ||
          strcmp(name, ".git") == 0 || strcmp(name, "node_modules") == 0 ||
@@ -83,10 +86,22 @@ static int read_file(int directory, const char *name) {
     close(file);
     return -1;
   }
+  if (metadata.st_size > MAX_READ_BYTES) {
+    errno = EFBIG;
+    close(file);
+    return -1;
+  }
   char buffer[65536];
   ssize_t count;
+  size_t total = 0;
   while ((count = read(file, buffer, sizeof(buffer))) > 0) {
+    if ((size_t)count > MAX_READ_BYTES - total) {
+      errno = EFBIG;
+      close(file);
+      return -1;
+    }
     if (fwrite(buffer, 1, (size_t)count, stdout) != (size_t)count) { close(file); return -1; }
+    total += (size_t)count;
   }
   int saved = errno;
   close(file);

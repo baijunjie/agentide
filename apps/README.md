@@ -2,7 +2,7 @@
 
 ## macOS 客户端
 
-`apps/macos/` 是 SwiftUI macOS 应用入口，依赖本地 `AgentIDEProtocol` Swift Package。应用登记并保存稳定的本机设备身份，生成短期配对二维码，管理已配对的 iPhone 和 Agent Host 中的本机项目。它持有 Mac 唯一的 Relay 连接，并通过该连接响应 iPhone 的项目列表与目录列举请求。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，项目行为见 [项目登记与文件浏览](../docs/product/project-files.md)。
+`apps/macos/` 是 SwiftUI macOS 应用入口，依赖本地 `AgentIDEProtocol` Swift Package。应用登记并保存稳定的本机设备身份，生成短期配对二维码，管理已配对的 iPhone 和 Agent Host 中的本机项目。它持有 Mac 唯一的 Relay 连接，并通过该连接响应 iPhone 的项目列表、目录列举、文件读取与同目录图片请求。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，项目行为见 [项目登记与文件浏览](../docs/product/project-files.md)。
 
 对外入口：
 
@@ -10,7 +10,7 @@
 
 ## iOS 客户端
 
-`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并在 Mac 在线时取得项目列表和按需展开项目文件树。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)。
+`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并在 Mac 在线时取得项目列表、按需展开项目文件树，以及只读查看文本和同目录图片。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)。
 
 对外入口：
 
@@ -66,4 +66,5 @@
 
 - `LocalFileService` 负责校验项目 ID 与相对路径、标注文件类型，并调用随包构建的 `native/file-access.c` helper；helper 才执行目录列举和文件读取。
 - helper 从文件系统根目录描述符开始，逐段打开登记根路径和项目内相对路径且不跟随符号链接，避免根路径祖先或项目内路径在检查与实际打开之间被并发替换。默认忽略路径在 TypeScript 授权层和 helper 中都会拒绝；修改忽略集合时必须保持两处一致。
+- helper 将单次文件读取限制为最多 700 KiB 原始字节，并在读取过程中再次守住该上限，以免文件在打开后增长导致响应越界。
 - `pnpm --filter @agentide/agent-host build` 除编译 TypeScript 外，还要求系统提供 `cc`，并把 helper 构建为 `dist/native/file-access`；运行 Agent Host 前必须保留该相对位置。

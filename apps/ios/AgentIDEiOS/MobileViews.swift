@@ -54,14 +54,37 @@ struct MobileHomeView: View {
 private struct FileBrowserView: View {
     @EnvironmentObject private var connection: MobileConnection
     let project: RemoteProject
+    @State private var expandedPaths: Set<String> = []
+    @State private var scrollPosition: String?
+    @State private var selectedImage: ImageFileSelection?
     var body: some View {
         List {
-            if connection.isLoading(projectId: project.id, path: "") && connection.entries(projectId: project.id, path: "") == nil { ProgressView() }
-            ForEach(connection.entries(projectId: project.id, path: "") ?? [], id: \.relativePath) { entry in FileTreeRow(project: project, entry: entry, depth: 0) }
+            if connection.entries(projectId: project.id, path: "") == nil {
+                if connection.isLoading(projectId: project.id, path: "") { ProgressView() }
+                else if let error = connection.directoryError(projectId: project.id, path: "") {
+                    directoryError(error, path: "")
+                }
+            }
+            ForEach(connection.entries(projectId: project.id, path: "") ?? [], id: \.relativePath) { entry in
+                FileTreeRow(project: project, entry: entry, depth: 0, expandedPaths: $expandedPaths) { selectedImage = $0 }
+            }
         }
         .animation(.easeInOut(duration: 0.2), value: connection.files.count)
+        .scrollPosition(id: $scrollPosition)
         .navigationTitle(project.name)
+        .navigationDestination(for: TextFileSelection.self) { TextFileViewer(selection: $0) }
+        .fullScreenCover(item: $selectedImage) { ImageViewer(selection: $0) }
         .task { if connection.entries(projectId: project.id, path: "") == nil { connection.requestFiles(projectId: project.id, relativePath: "") } }
+    }
+    private func directoryError(_ message: String, path: String) -> some View {
+        VStack(spacing: 8) {
+            Label("Folder Unavailable", systemImage: "folder.badge.questionmark")
+            Text(message).font(.caption).foregroundStyle(.secondary)
+            Button("Retry") { connection.requestFiles(projectId: project.id, relativePath: path) }
+                .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical)
     }
 }
 
@@ -70,30 +93,61 @@ private struct FileTreeRow: View {
     let project: RemoteProject
     let entry: FileEntry
     let depth: Int
-    @State private var expanded = false
+    @Binding var expandedPaths: Set<String>
+    let openImage: (ImageFileSelection) -> Void
+    private var expanded: Bool { expandedPaths.contains(entry.relativePath) }
     var body: some View {
         Group {
-            Button {
-                guard entry.type == .directory else { return }
-                withAnimation { expanded.toggle() }
-                if expanded && connection.entries(projectId: project.id, path: entry.relativePath) == nil { connection.requestFiles(projectId: project.id, relativePath: entry.relativePath) }
-            } label: {
-                HStack(spacing: 8) {
-                    if entry.type == .directory { Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption).frame(width: 12) }
-                    else { Color.clear.frame(width: 12, height: 1) }
-                    Image(systemName: icon).foregroundStyle(entry.type == .directory ? .blue : .secondary)
-                    VStack(alignment: .leading, spacing: 2) { Text(entry.name).foregroundStyle(.primary); Text(entry.relativePath).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
-                    Spacer()
-                }.padding(.leading, CGFloat(depth) * 18)
-            }.buttonStyle(.plain).contextMenu {
+            rowAction.contextMenu {
                 Button("Copy Name") { UIPasteboard.general.string = entry.name }
                 Button("Copy Relative Path") { UIPasteboard.general.string = entry.relativePath }
             }
             if expanded {
                 if connection.isLoading(projectId: project.id, path: entry.relativePath) { ProgressView().padding(.leading, CGFloat(depth + 1) * 18) }
-                ForEach(connection.entries(projectId: project.id, path: entry.relativePath) ?? [], id: \.relativePath) { child in FileTreeRow(project: project, entry: child, depth: depth + 1) }
+                else if let error = connection.directoryError(projectId: project.id, path: entry.relativePath) {
+                    HStack {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                        Spacer()
+                        Button("Retry") { connection.requestFiles(projectId: project.id, relativePath: entry.relativePath) }
+                    }
+                    .padding(.leading, CGFloat(depth + 1) * 18)
+                }
+                ForEach(connection.entries(projectId: project.id, path: entry.relativePath) ?? [], id: \.relativePath) { child in
+                    FileTreeRow(project: project, entry: child, depth: depth + 1, expandedPaths: $expandedPaths, openImage: openImage)
+                }
             }
         }
+    }
+    @ViewBuilder private var rowAction: some View {
+        if entry.type == .directory {
+            Button {
+                let wasExpanded = expanded
+                withAnimation {
+                    if wasExpanded { expandedPaths.remove(entry.relativePath) }
+                    else { expandedPaths.insert(entry.relativePath) }
+                }
+                if !wasExpanded && connection.entries(projectId: project.id, path: entry.relativePath) == nil {
+                    connection.requestFiles(projectId: project.id, relativePath: entry.relativePath)
+                }
+            } label: { rowLabel }.buttonStyle(.plain)
+        } else if entry.isImage == true {
+            Button { openImage(.init(project: project, entry: entry)) } label: { rowLabel }.buttonStyle(.plain)
+        } else if entry.isText == true {
+            NavigationLink(value: TextFileSelection(project: project, entry: entry)) { rowLabel }.buttonStyle(.plain)
+        } else {
+            rowLabel
+        }
+    }
+    private var rowLabel: some View {
+        HStack(spacing: 8) {
+            if entry.type == .directory { Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption).frame(width: 12) }
+            else { Color.clear.frame(width: 12, height: 1) }
+            Image(systemName: icon).foregroundStyle(entry.type == .directory ? .blue : .secondary)
+            VStack(alignment: .leading, spacing: 2) { Text(entry.name).foregroundStyle(.primary); Text(entry.relativePath).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+            Spacer()
+        }
+        .padding(.leading, CGFloat(depth) * 18)
+        .id(entry.relativePath)
     }
     private var icon: String {
         if entry.type == .directory { return expanded ? "folder.fill" : "folder" }

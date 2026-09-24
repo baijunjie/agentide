@@ -52,9 +52,10 @@ macOS、iOS、Relay Server 与 Agent Host 通过同一套版本化 JSON 契约�
 | `file.changed` | 项目内相对路径被创建、修改或删除。 |
 | `approval.requested` | 请求用户一次批准、会话级批准或拒绝。可用动作必须是非空集合。 |
 | `question.requested` | 请求用户选择选项或按 `allowFreeText` 提交自由文本。 |
-| `status` | 会话正在运行或等待用户。 |
+| `status` | 会话正在运行、空闲或等待用户。 |
 | `error` | 带稳定错误码、消息和可恢复标记的错误。 |
-| `session.completed` | 会话以完成、失败或取消结束。 |
+| `turn.completed` | 当前轮次以完成、失败或取消结束；会话随后仍可继续。 |
+| `session.completed` | 整个会话以完成、失败或取消终止。 |
 
 事件中的工具输入、工具输出和错误详情是未解释的 JSON 值；其中显式 `null` 必须在跨语言编解码后保留。事件判别仅使用统一的 `type` 字段，不使用 Agent 原生字段替代。
 
@@ -71,10 +72,12 @@ macOS、iOS、Relay Server 与 Agent Host 通过同一套版本化 JSON 契约�
 
 Adapter 类型只能是 `claude` 或 `codex`。上层以统一会话 ID 调用 Adapter；Agent 自己的会话标识单独保存在 `nativeSessionId`，不替代统一会话 ID。
 
+Codex 的现行能力、会话恢复以及统一事件的持久化和远程投递规则见 [Agent 会话执行与事件投递](agent-sessions.md)。
+
 ## 共享业务对象
 
 - `Project` 保存稳定标识、显示名、本机根路径、创建时间和启用的 Agent 类型。根路径属于 Mac 本地项目模型。
-- `Session` 关联项目与 Agent，状态固定为 `starting`、`running`、`waiting_user`、`completed`、`failed` 或 `cancelled`。
+- `Session` 关联项目与 Agent，状态固定为 `starting`、`running`、`idle`、`waiting_user`、`completed`、`failed` 或 `cancelled`。`idle` 表示当前没有活动轮次但会话仍可继续。
 - `FileEntry` 使用项目内相对路径标识文件或目录，并可附带大小、扩展名以及文本/图片能力标记。
 
 Envelope 与 `AgentEvent` 由 TypeScript 运行时校验器、Draft 2020-12 JSON Schema 和 Swift `Codable` DTO 共同消费正反例 fixtures，以固定跨语言的接受与拒绝行为。`Project`、`Session` 和 `FileEntry` 当前只有 TypeScript 静态类型、JSON Schema 与 Swift DTO，并以正例 fixture 验证共同解码；它们没有独立的 TypeScript 运行时守卫。协议字段、枚举或可选值语义变化时，相关类型、Schema、DTO 与覆盖该边界的 fixtures 必须同步更新。

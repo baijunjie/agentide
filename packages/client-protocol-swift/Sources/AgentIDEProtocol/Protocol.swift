@@ -30,6 +30,7 @@ public enum AgentType: String, Codable, Sendable {
 public enum SessionStatus: String, Codable, Sendable {
     case starting
     case running
+    case idle
     case waitingUser = "waiting_user"
     case completed
     case failed
@@ -436,7 +437,7 @@ public struct QuestionRequestedEvent: Codable, Equatable, Sendable {
 }
 
 public struct StatusEvent: Codable, Equatable, Sendable {
-    public enum Status: String, Codable, Sendable { case running, waitingUser = "waiting_user" }
+    public enum Status: String, Codable, Sendable { case running, idle, waitingUser = "waiting_user" }
 
     public let id: String
     public let sessionId: String
@@ -469,6 +470,17 @@ public struct SessionCompletedEvent: Codable, Equatable, Sendable {
     public let outcome: Outcome
 }
 
+public struct TurnCompletedEvent: Codable, Equatable, Sendable {
+    public enum Outcome: String, Codable, Sendable { case completed, failed, cancelled }
+
+    public let id: String
+    public let sessionId: String
+    public let sequence: Int
+    public let timestamp: String
+    public let type: String
+    public let outcome: Outcome
+}
+
 public enum AgentEvent: Codable, Equatable, Sendable {
     case sessionStarted(SessionStartedEvent)
     case textDelta(TextDeltaEvent)
@@ -481,6 +493,7 @@ public enum AgentEvent: Codable, Equatable, Sendable {
     case questionRequested(QuestionRequestedEvent)
     case status(StatusEvent)
     case error(ErrorEvent)
+    case turnCompleted(TurnCompletedEvent)
     case sessionCompleted(SessionCompletedEvent)
 
     private enum CodingKeys: String, CodingKey { case id, sessionId, sequence, timestamp, type }
@@ -521,6 +534,7 @@ public enum AgentEvent: Codable, Equatable, Sendable {
             try rejectExplicitNull(decoder, fields: ["message"])
             self = .status(try StatusEvent(from: decoder))
         case "error": self = .error(try ErrorEvent(from: decoder))
+        case "turn.completed": self = .turnCompleted(try TurnCompletedEvent(from: decoder))
         case "session.completed": self = .sessionCompleted(try SessionCompletedEvent(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
@@ -544,6 +558,7 @@ public enum AgentEvent: Codable, Equatable, Sendable {
         case let .questionRequested(event): try event.encode(to: encoder)
         case let .status(event): try event.encode(to: encoder)
         case let .error(event): try event.encode(to: encoder)
+        case let .turnCompleted(event): try event.encode(to: encoder)
         case let .sessionCompleted(event): try event.encode(to: encoder)
         }
     }

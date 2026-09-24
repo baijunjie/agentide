@@ -23,7 +23,7 @@
         "agentType": { "enum": ["claude", "codex"] },
         "nativeSessionId": { "type": "string" },
         "title": { "type": "string" },
-        "status": { "enum": ["starting", "running", "waiting_user", "completed", "failed", "cancelled"] },
+        "status": { "enum": ["starting", "running", "idle", "waiting_user", "completed", "failed", "cancelled"] },
         "createdAt": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" },
         "updatedAt": { "type": "string", "format": "date-time", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" }
       },

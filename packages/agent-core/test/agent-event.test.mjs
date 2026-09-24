@@ -11,7 +11,7 @@ const fixture = async (name) =>
 
 test("all unified AgentEvent discriminators pass runtime validation", async () => {
   const events = await fixture("agent-events");
-  assert.equal(events.length, 12);
+  assert.equal(events.length, 13);
   assert.equal(events.every(isAgentEvent), true);
   const nullUnknownEvents = await fixture("agent-events-null-unknown");
   assert.equal(nullUnknownEvents.every(isAgentEvent), true);

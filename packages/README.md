@@ -23,7 +23,7 @@
 
 - 协议封装：`ProtocolVersion`、`MessageType`、`Envelope`、`ResponseEnvelope`、`ProtocolError`、`WirePayload`、`EncryptedPayload`、`JSONValue`、`EmptyPayload`。
 - 共享对象：`AgentType`、`SessionStatus`、`Project`、`Session`、`FileEntry`。
-- Agent 事件：`AgentEvent`、12 个具体事件 DTO、`ApprovalAction` 与 `QuestionOption`。
+- Agent 事件：`AgentEvent`、13 个具体事件 DTO、`ApprovalAction` 与 `QuestionOption`。
 
 Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“显式 null”；未解释的 JSON payload 通过 `JSONValue` 往返，不能用普通 Swift 可选值吞掉显式 null。
 
@@ -56,6 +56,6 @@ Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“�
 
 | 包 | 当前对外接口 | 职责边界 |
 | --- | --- | --- |
-| `@agentide/agent-codex` | `CODEX_ADAPTER_KIND` | Codex Adapter 的独立集成位置。 |
+| `@agentide/agent-codex` | `CODEX_ADAPTER_KIND`、`CodexAdapter`、`CodexAdapterOptions`、`SpawnedCodexAppServer`、`CodexAppServerConnection`、`CodexNotification`、`CodexServerRequest` | 管理 `codex app-server` JSONL RPC，并把 Codex thread、turn、工具、文件变更和审批适配为统一 Agent 契约。 |
 | `@agentide/agent-claude` | `CLAUDE_ADAPTER_KIND` | Claude Adapter 的独立集成位置。 |
 | `@agentide/crypto` | `CRYPTO_BOUNDARY_VERSION` | payload 加密能力的独立实现位置。 |

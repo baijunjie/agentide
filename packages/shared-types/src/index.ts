@@ -11,6 +11,7 @@ export interface Project {
 export type SessionStatus =
   | "starting"
   | "running"
+  | "idle"
   | "waiting_user"
   | "completed"
   | "failed"

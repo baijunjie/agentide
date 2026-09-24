@@ -9,6 +9,8 @@ export {
 export { LocalFileService } from "./file-service.js";
 export { createAgentHostServer } from "./ipc-server.js";
 export { ProjectStore } from "./project-store.js";
+export { SessionManager, type CreateManagedSession } from "./session-manager.js";
+export { SessionStore } from "./session-store.js";
 
 export interface FileService {
   list(projectId: string, relativePath: string): Promise<FileEntry[]>;

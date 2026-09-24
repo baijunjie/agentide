@@ -80,7 +80,7 @@ export interface QuestionRequestedEvent extends BaseEvent {
 
 export interface StatusEvent extends BaseEvent {
   type: "status";
-  status: "running" | "waiting_user";
+  status: "running" | "idle" | "waiting_user";
   message?: string;
 }
 
@@ -96,6 +96,11 @@ export interface SessionCompletedEvent extends BaseEvent {
   outcome: "completed" | "failed" | "cancelled";
 }
 
+export interface TurnCompletedEvent extends BaseEvent {
+  type: "turn.completed";
+  outcome: "completed" | "failed" | "cancelled";
+}
+
 export type AgentEvent =
   | SessionStartedEvent
   | TextDeltaEvent
@@ -108,6 +113,7 @@ export type AgentEvent =
   | QuestionRequestedEvent
   | StatusEvent
   | ErrorEvent
+  | TurnCompletedEvent
   | SessionCompletedEvent;
 
 export interface AgentCapabilities {
@@ -139,7 +145,7 @@ export interface AgentAdapter {
 
   capabilities(): AgentCapabilities;
   createSession(options: CreateSessionOptions): Promise<AgentSession>;
-  resumeSession(nativeSessionId: string): Promise<AgentSession>;
+  resumeSession(nativeSessionId: string, workingDirectory?: string): Promise<AgentSession>;
   sendMessage(sessionId: string, input: AgentInput): Promise<void>;
   cancel(sessionId: string): Promise<void>;
   respondToInteraction(
@@ -209,7 +215,7 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
     case "status":
       return (
         typeof value.status === "string" &&
-        ["running", "waiting_user"].includes(value.status) &&
+        ["running", "idle", "waiting_user"].includes(value.status) &&
         optionalString(value.message)
       );
     case "error":
@@ -219,6 +225,7 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
         typeof value.recoverable === "boolean"
       );
     case "session.completed":
+    case "turn.completed":
       return (
         typeof value.outcome === "string" &&
         ["completed", "failed", "cancelled"].includes(value.outcome)

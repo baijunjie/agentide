@@ -1,11 +1,15 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { LocalFileService } from "./file-service.js";
 import { ProjectStore } from "./project-store.js";
+import { SessionManager } from "./session-manager.js";
 
-export function createAgentHostServer(projects = new ProjectStore()) {
+export function createAgentHostServer(
+  projects = new ProjectStore(),
+  sessions = SessionManager.local(projects),
+) {
   const files = new LocalFileService(projects);
   return createServer((request, response) => {
-    void route(request, response, projects, files).catch((error: unknown) => {
+    void route(request, response, projects, files, sessions).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Unexpected error";
       sendJSON(response, statusFor(message), { error: message });
     });
@@ -17,6 +21,7 @@ async function route(
   response: ServerResponse,
   projects: ProjectStore,
   files: LocalFileService,
+  sessions: SessionManager,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   if (request.method === "GET" && url.pathname === "/health") {
@@ -31,6 +36,63 @@ async function route(
     const body = await readJSON(request);
     sendJSON(response, 201, await projects.add(requireString(body, "rootPath"), optionalString(body, "name")));
     return;
+  }
+  if (url.pathname === "/sessions" && request.method === "GET") {
+    const projectId = url.searchParams.get("projectId") ?? undefined;
+    sendJSON(response, 200, { sessions: await sessions.list(projectId) });
+    return;
+  }
+  if (url.pathname === "/sessions" && request.method === "POST") {
+    const body = await readJSON(request);
+    const agentType = requireString(body, "agentType");
+    if (agentType !== "codex" && agentType !== "claude") throw new Error("agentType must be codex or claude");
+    const initialPrompt = optionalString(body, "initialPrompt");
+    sendJSON(response, 201, await sessions.create({
+      projectId: requireString(body, "projectId"),
+      agentType,
+      ...(initialPrompt === undefined ? {} : { initialPrompt }),
+    }));
+    return;
+  }
+
+  const sessionMatch = /^\/sessions\/([^/]+)$/.exec(url.pathname);
+  if (sessionMatch !== null && request.method === "GET") {
+    sendJSON(response, 200, await sessions.get(decodeURIComponent(sessionMatch[1] ?? "")));
+    return;
+  }
+  const sessionOperationMatch = /^\/sessions\/([^/]+)\/(events|messages|cancel|interactions)$/.exec(url.pathname);
+  if (sessionOperationMatch !== null) {
+    const sessionId = decodeURIComponent(sessionOperationMatch[1] ?? "");
+    const operation = sessionOperationMatch[2];
+    if (operation === "events" && request.method === "GET") {
+      const afterValue = url.searchParams.get("afterSequence");
+      const afterSequence = afterValue === null ? undefined : Number(afterValue);
+      if (afterSequence !== undefined && !Number.isInteger(afterSequence)) throw new Error("afterSequence must be an integer");
+      sendJSON(response, 200, { events: await sessions.events(sessionId, afterSequence) });
+      return;
+    }
+    if (operation === "messages" && request.method === "POST") {
+      await sessions.sendMessage(sessionId, { content: requireString(await readJSON(request), "content") });
+      response.writeHead(204).end();
+      return;
+    }
+    if (operation === "cancel" && request.method === "POST") {
+      await sessions.cancel(sessionId);
+      response.writeHead(204).end();
+      return;
+    }
+    if (operation === "interactions" && request.method === "POST") {
+      const body = await readJSON(request);
+      const kind = requireString(body, "kind");
+      if (kind !== "approval") throw new Error("Only approval interactions are supported");
+      const action = requireString(body, "action");
+      if (action !== "approve_once" && action !== "approve_session" && action !== "reject") {
+        throw new Error("Invalid approval action");
+      }
+      await sessions.respond(sessionId, requireString(body, "interactionId"), { kind, action });
+      response.writeHead(204).end();
+      return;
+    }
   }
 
   const projectMatch = /^\/projects\/([^/]+)$/.exec(url.pathname);
@@ -89,7 +151,7 @@ function optionalString(body: Record<string, unknown>, key: string): string | un
 }
 
 function statusFor(message: string): number {
-  if (message === "Project not found") return 404;
+  if (message === "Project not found" || message === "Session not found") return 404;
   if (message === "Project is already registered") return 409;
   if (message.includes("ENOENT")) return 404;
   return 400;

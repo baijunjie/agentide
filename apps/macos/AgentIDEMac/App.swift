@@ -14,6 +14,7 @@ struct AgentIDEMacApp: App {
 
 @MainActor
 final class MacConnection: ObservableObject {
+    private struct EventStreamKey: Hashable { let targetDeviceId: String; let sessionId: String }
     struct Pairing: Decodable { let expiresAt: String; let qrPayload: String; let secret: String }
     struct Device: Decodable, Identifiable { let id: String; let name: String; let online: Bool }
     struct DeviceList: Decodable { let devices: [Device] }
@@ -21,6 +22,7 @@ final class MacConnection: ObservableObject {
     struct ProjectList: Decodable { let projects: [Project] }
     struct FileList: Decodable { let entries: [FileEntry] }
     struct FileContent: Decodable { let content: String }
+    struct SessionList: Decodable { let events: [AgentEvent] }
 
     @Published var server = UserDefaults.standard.string(forKey: "relayServer") ?? "http://127.0.0.1:8787"
     @Published var pairing: Pairing?
@@ -31,6 +33,9 @@ final class MacConnection: ObservableObject {
     private let deviceId: String
     private var token: String?
     private var socket: URLSessionWebSocketTask?
+    private var sessionStreams: [EventStreamKey: Task<Void, Never>] = [:]
+    private var acknowledgedEventSequences: [EventStreamKey: Int] = [:]
+    private var sessionStreamGenerations: [EventStreamKey: Int] = [:]
     // TODO: Replace the development endpoint with the packaged companion-process endpoint before release.
     private let agentHost = URL(string: "http://127.0.0.1:8788")!
 
@@ -124,7 +129,14 @@ final class MacConnection: ObservableObject {
     private func handleRelayMessage(_ data: Data) async {
         guard let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let type = message["type"] as? String else { return }
         if type == "system.presence" { await refreshDevices(); return }
-        guard let requestId = message["id"] as? String, let source = message["sourceDeviceId"] as? String else { return }
+        guard let source = message["sourceDeviceId"] as? String else { return }
+        if type == "agent.event.ack", let sessionId = message["sessionId"] as? String,
+           let payload = message["payload"] as? [String: Any], let sequence = payload["sequence"] as? Int {
+            let key = EventStreamKey(targetDeviceId: source, sessionId: sessionId)
+            acknowledgedEventSequences[key] = max(acknowledgedEventSequences[key] ?? -1, sequence)
+            return
+        }
+        guard let requestId = message["id"] as? String else { return }
         if type == "project.list" {
             do {
                 projects = try await loadProjects()
@@ -172,7 +184,136 @@ final class MacConnection: ObservableObject {
                 sendResponse(to: source, replyTo: requestId, type: "project.listImages.response", projectId: projectId,
                              payload: ["current": currentValue, "siblings": siblingValues])
             } catch { sendResponse(to: source, replyTo: requestId, type: "project.listImages.response", projectId: projectId, error: error.localizedDescription) }
+        } else if type == "session.create" {
+            guard let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any],
+                  let agentType = payload["agentType"] as? String,
+                  let initialTask = payload["initialTask"] as? String else {
+                sendResponse(to: source, replyTo: requestId, type: "session.create.response", error: "Invalid session.create request", errorCode: "session_request_failed")
+                return
+            }
+            do {
+                let session: Session = try await hostRequest("/sessions", method: "POST", body: ["projectId": projectId, "agentType": agentType, "initialPrompt": initialTask])
+                let sessionValue = try JSONSerialization.jsonObject(with: JSONEncoder().encode(session))
+                sendResponse(to: source, replyTo: requestId, type: "session.create.response", projectId: projectId, payload: ["session": sessionValue])
+                streamEvents(for: session.id, projectId: projectId, to: source, afterSequence: -1)
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "session.create.response", projectId: projectId, error: error.localizedDescription, errorCode: "session_request_failed")
+            }
+        } else if type == "session.sendMessage" {
+            guard let projectId = message["projectId"] as? String,
+                  let sessionId = message["sessionId"] as? String,
+                  let payload = message["payload"] as? [String: Any],
+                  let content = payload["content"] as? String else {
+                sendResponse(to: source, replyTo: requestId, type: "session.sendMessage.response", error: "Invalid session.sendMessage request", errorCode: "session_request_failed")
+                return
+            }
+            do {
+                let session: Session = try await hostRequest("/sessions/\(sessionId)", method: "GET", body: Optional<String>.none)
+                guard session.projectId == projectId else { throw NSError(domain: "AgentIDE", code: 400, userInfo: [NSLocalizedDescriptionKey: "Session does not belong to project"]) }
+                let _: EmptyResponse = try await hostRequest("/sessions/\(sessionId)/messages", method: "POST", body: ["content": content])
+                sendResponse(to: source, replyTo: requestId, type: "session.sendMessage.response", projectId: projectId, payload: [:])
+                streamEvents(for: sessionId, projectId: projectId, to: source, afterSequence: payload["afterSequence"] as? Int ?? -1)
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "session.sendMessage.response", projectId: projectId, error: error.localizedDescription, errorCode: "session_request_failed")
+            }
+        } else if type == "session.subscribe" {
+            guard let projectId = message["projectId"] as? String,
+                  let sessionId = message["sessionId"] as? String,
+                  let payload = message["payload"] as? [String: Any],
+                  let afterSequence = payload["afterSequence"] as? Int else {
+                sendResponse(to: source, replyTo: requestId, type: "session.subscribe.response", error: "Invalid session.subscribe request", errorCode: "session_request_failed")
+                return
+            }
+            do {
+                let session: Session = try await hostRequest("/sessions/\(sessionId)", method: "GET", body: Optional<String>.none)
+                guard session.projectId == projectId else { throw NSError(domain: "AgentIDE", code: 400, userInfo: [NSLocalizedDescriptionKey: "Session does not belong to project"]) }
+                streamEvents(for: sessionId, projectId: projectId, to: source, afterSequence: afterSequence)
+                sendResponse(to: source, replyTo: requestId, type: "session.subscribe.response", projectId: projectId, payload: [:])
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "session.subscribe.response", projectId: projectId, error: error.localizedDescription, errorCode: "session_request_failed")
+            }
+        } else if type == "session.cancel" {
+            guard let sessionId = message["sessionId"] as? String else {
+                sendResponse(to: source, replyTo: requestId, type: "session.cancel.response", error: "Invalid session.cancel request", errorCode: "session_request_failed")
+                return
+            }
+            do {
+                let session: Session = try await hostRequest("/sessions/\(sessionId)", method: "GET", body: Optional<String>.none)
+                let _: EmptyResponse = try await hostRequest("/sessions/\(sessionId)/cancel", method: "POST", body: EmptyResponse())
+                sendResponse(to: source, replyTo: requestId, type: "session.cancel.response", projectId: session.projectId, payload: [:])
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "session.cancel.response", projectId: message["projectId"] as? String, error: error.localizedDescription, errorCode: "session_request_failed")
+            }
+        } else if type == "interaction.respond" {
+            guard let sessionId = message["sessionId"] as? String,
+                  let payload = message["payload"] as? [String: Any],
+                  let interactionId = payload["interactionId"] as? String,
+                  let action = payload["action"] as? String else {
+                sendResponse(to: source, replyTo: requestId, type: "interaction.respond.response", error: "Invalid interaction.respond request", errorCode: "session_request_failed")
+                return
+            }
+            do {
+                let session: Session = try await hostRequest("/sessions/\(sessionId)", method: "GET", body: Optional<String>.none)
+                let body = ["kind": "approval", "interactionId": interactionId, "action": action]
+                let _: EmptyResponse = try await hostRequest("/sessions/\(sessionId)/interactions", method: "POST", body: body)
+                sendResponse(to: source, replyTo: requestId, type: "interaction.respond.response", projectId: session.projectId, payload: [:])
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "interaction.respond.response", projectId: message["projectId"] as? String, error: error.localizedDescription, errorCode: "session_request_failed")
+            }
         }
+    }
+
+    private func streamEvents(for sessionId: String, projectId: String, to target: String, afterSequence: Int) {
+        let key = EventStreamKey(targetDeviceId: target, sessionId: sessionId)
+        acknowledgedEventSequences[key] = max(acknowledgedEventSequences[key] ?? -1, afterSequence)
+        sessionStreamGenerations[key] = (sessionStreamGenerations[key] ?? 0) + 1
+        guard sessionStreams[key] == nil else { return }
+        sessionStreams[key] = Task { [weak self] in
+            defer {
+                self?.sessionStreams.removeValue(forKey: key)
+                self?.sessionStreamGenerations.removeValue(forKey: key)
+            }
+            while !Task.isCancelled {
+                guard let self else { return }
+                do {
+                    let generation = self.sessionStreamGenerations[key]
+                    let sequence = self.acknowledgedEventSequences[key] ?? -1
+                    let list: SessionList = try await self.hostRequest("/sessions/\(sessionId)/events?afterSequence=\(sequence)", method: "GET", body: Optional<String>.none)
+                    var latestEventIsTerminal = false
+                    for event in list.events {
+                        let payload = try JSONSerialization.jsonObject(with: JSONEncoder().encode(event))
+                        guard let value = payload as? [String: Any], let eventSequence = value["sequence"] as? Int else { continue }
+                        while !Task.isCancelled, (self.acknowledgedEventSequences[key] ?? -1) < eventSequence {
+                            try await self.sendPush(to: target, type: "agent.event", projectId: projectId, sessionId: sessionId,
+                                                    payload: self.relayPayload(for: value, projectId: projectId, sessionId: sessionId,
+                                                                               target: target, sequence: eventSequence))
+                            try? await Task.sleep(for: .seconds(1))
+                        }
+                        switch event {
+                        case .turnCompleted, .sessionCompleted: latestEventIsTerminal = true
+                        default: latestEventIsTerminal = false
+                        }
+                    }
+                    if latestEventIsTerminal, self.sessionStreamGenerations[key] == generation { return }
+                } catch {
+                    if Task.isCancelled { return }
+                    self.error = "Agent Host: \(error.localizedDescription)"
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func relayPayload(for event: [String: Any], projectId: String, sessionId: String, target: String, sequence: Int) -> [String: Any] {
+        let probe: [String: Any] = ["version": 1, "id": UUID().uuidString, "type": "agent.event", "sourceDeviceId": deviceId,
+                                    "targetDeviceId": target, "projectId": projectId, "sessionId": sessionId,
+                                    "timestamp": ISO8601DateFormatter().string(from: Date()), "payload": event]
+        if let data = try? JSONSerialization.data(withJSONObject: probe), data.count <= maxRelayMessageBytes { return event }
+        return ["id": UUID().uuidString, "sessionId": sessionId, "sequence": sequence,
+                "timestamp": ISO8601DateFormatter().string(from: Date()),
+                "type": "error", "code": "agent_event_too_large", "message": "Agent event exceeded the relay size limit", "recoverable": true]
     }
 
     private func publicProject(_ project: Project) -> [String: Any] {
@@ -184,24 +325,36 @@ final class MacConnection: ObservableObject {
         return list.projects
     }
 
-    private func sendResponse(to target: String, replyTo: String, type: String, projectId: String? = nil, payload: [String: Any]? = nil, error: String? = nil) {
+    private func sendResponse(to target: String, replyTo: String, type: String, projectId: String? = nil, payload: [String: Any]? = nil, error: String? = nil, errorCode: String = "project_request_failed") {
         var value: [String: Any] = ["version": 1, "id": UUID().uuidString, "type": type, "sourceDeviceId": deviceId, "targetDeviceId": target,
                                     "timestamp": ISO8601DateFormatter().string(from: Date()), "replyTo": replyTo, "ok": error == nil]
         if let projectId { value["projectId"] = projectId }
         if let error {
             value["payload"] = NSNull()
-            value["error"] = ["code": "project_request_failed", "message": error]
+            value["error"] = ["code": errorCode, "message": error]
         } else if let payload { value["payload"] = payload }
         guard var data = try? JSONSerialization.data(withJSONObject: value) else { return }
         if data.count > maxRelayMessageBytes {
             value["ok"] = false
             value["payload"] = NSNull()
-            value["error"] = ["code": "project_request_failed", "message": "Project response is too large"]
+            value["error"] = ["code": errorCode, "message": "Response is too large"]
             guard let fallback = try? JSONSerialization.data(withJSONObject: value) else { return }
             data = fallback
         }
         guard let text = String(data: data, encoding: .utf8) else { return }
         socket?.send(.string(text)) { _ in }
+    }
+
+    private func sendPush(to target: String, type: String, projectId: String, sessionId: String, payload: Any) async throws {
+        let value: [String: Any] = ["version": 1, "id": UUID().uuidString, "type": type, "sourceDeviceId": deviceId,
+                                    "targetDeviceId": target, "projectId": projectId, "sessionId": sessionId,
+                                    "timestamp": ISO8601DateFormatter().string(from: Date()), "payload": payload]
+        guard let data = try? JSONSerialization.data(withJSONObject: value), data.count <= maxRelayMessageBytes,
+              let text = String(data: data, encoding: .utf8) else {
+            throw NSError(domain: "AgentIDE", code: 413, userInfo: [NSLocalizedDescriptionKey: "Agent event is too large"])
+        }
+        guard let socket else { throw URLError(.notConnectedToInternet) }
+        try await socket.send(.string(text))
     }
 
     private func relayRequest<Response: Decodable, Body: Encodable>(_ path: String, method: String, body: Body?, authenticated: Bool) async throws -> Response {

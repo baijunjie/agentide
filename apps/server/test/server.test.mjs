@@ -103,6 +103,7 @@ test("paired websocket devices receive presence and routed envelopes", async (co
     `ws://127.0.0.1:${port}/connect?deviceId=mac-1`,
     registration.token,
   );
+  const macPresence = nextMessageMatching(mac, (message) => message.type === "system.presence" && message.payload.online === true);
   const ios = await connect(
     `ws://127.0.0.1:${port}/connect?deviceId=ios-1`,
     claim.token,
@@ -112,7 +113,7 @@ test("paired websocket devices receive presence and routed envelopes", async (co
     ios.close();
   });
 
-  const presence = await nextMessage(mac);
+  const presence = await macPresence;
   assert.equal(presence.type, "system.presence");
   assert.equal(presence.payload.online, true);
   const envelope = {
@@ -124,8 +125,9 @@ test("paired websocket devices receive presence and routed envelopes", async (co
     timestamp: new Date().toISOString(),
     payload: { projects: [] },
   };
+  const routedEnvelope = nextMessageMatching(ios, (message) => message.id === envelope.id);
   mac.send(JSON.stringify(envelope));
-  assert.deepEqual(await nextMessage(ios), envelope);
+  assert.deepEqual(await routedEnvelope, envelope);
 
   const fileError = {
     version: 1,
@@ -140,8 +142,9 @@ test("paired websocket devices receive presence and routed envelopes", async (co
     payload: null,
     error: { code: "project_request_failed", message: "Project not found" },
   };
+  const routedError = nextMessageMatching(ios, (message) => message.id === fileError.id);
   mac.send(JSON.stringify(fileError));
-  assert.deepEqual(await nextMessage(ios), fileError);
+  assert.deepEqual(await routedError, fileError);
 
   const closed = new Promise((resolve) => ios.once("close", resolve));
   const revoke = await fetch(`${base}/devices/ios-1`, {
@@ -196,15 +199,19 @@ async function connect(url, token) {
   return socket;
 }
 
-async function nextMessage(socket) {
+async function nextMessageMatching(socket, predicate) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("timed out waiting for websocket message")),
-      2_000,
-    );
-    socket.once("message", (data) => {
+    const timeout = setTimeout(() => {
+      socket.off("message", onMessage);
+      reject(new Error("timed out waiting for matching websocket message"));
+    }, 2_000);
+    const onMessage = (data) => {
+      const message = JSON.parse(data.toString());
+      if (!predicate(message)) return;
       clearTimeout(timeout);
-      resolve(JSON.parse(data.toString()));
-    });
+      socket.off("message", onMessage);
+      resolve(message);
+    };
+    socket.on("message", onMessage);
   });
 }

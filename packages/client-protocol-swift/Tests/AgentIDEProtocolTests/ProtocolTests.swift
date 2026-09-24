@@ -87,7 +87,7 @@ private func fixture(named name: String) throws -> Data {
 @Test func sharedAgentEventFixturesCoverEveryDiscriminator() throws {
     let decoder = JSONDecoder()
     let events = try decoder.decode([AgentEvent].self, from: fixture(named: "agent-events"))
-    #expect(events.count == 12)
+    #expect(events.count == 13)
 
     for name in ["agent-event-invalid-sequence", "agent-event-invalid-approval"] {
         #expect(throws: (any Error).self) {

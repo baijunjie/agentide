@@ -29,7 +29,7 @@ MVP 的完整闭环为：Mac 登记本地项目并运行 Agent，Relay Server �
 | 01 | [Monorepo 与统一协议骨架](01-Monorepo与统一协议骨架.md) | 已完成 | Mac、iOS、Server 已分别通过构建/启动验证，共享协议通过跨语言 fixtures 校验 |
 | 02 | [设备配对与三端连接](02-设备配对与三端连接.md) | 已完成 | 配对、Presence、撤销与路由集成测试通过，双端构建通过；真机扫码与 WSS 部署待验 |
 | 03 | [项目授权与文件浏览](03-项目授权与文件浏览.md) | 已完成 | 项目与文件 IPC、安全路径测试及双端构建通过；打包进程与真机操作待 09 验收 |
-| 05 | [Codex 会话适配](05-Codex会话适配.md) | 未开始 | Codex Adapter 通过统一协议完成一次实时会话 |
+| 05 | [Codex 会话适配](05-Codex会话适配.md) | 已完成 | Codex Adapter 通过统一协议完成真实 app-server 会话，并通过恢复、审批与事件持久化测试 |
 | 06 | [Claude Code 会话适配](06-Claude-Code会话适配.md) | 未开始 | Claude Adapter 通过统一协议完成一次实时会话 |
 | 07 | [Agent 会话与交互界面](07-Agent会话与交互界面.md) | 未开始 | 无需 Terminal UI 即可完成两类 Agent 的基础交互 |
 | 08 | [三层空间手势打磨](08-三层空间手势打磨.md) | 未开始 | 真机上顺畅完成 Session → Files → File 及返回 |

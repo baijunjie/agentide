@@ -20,6 +20,9 @@ importers:
 
   apps/agent-host:
     dependencies:
+      '@agentide/agent-codex':
+        specifier: workspace:*
+        version: link:../../packages/agent-codex
       '@agentide/agent-core':
         specifier: workspace:*
         version: link:../../packages/agent-core

@@ -2,7 +2,7 @@
 
 ## macOS 客户端
 
-`apps/macos/` 是 SwiftUI macOS 应用入口，依赖本地 `AgentIDEProtocol` Swift Package。应用登记并保存稳定的本机设备身份，生成短期配对二维码，管理已配对的 iPhone 和 Agent Host 中的本机项目。它持有 Mac 唯一的 Relay 连接，并通过该连接响应 iPhone 的项目列表、目录列举、文件读取与同目录图片请求。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，项目行为见 [项目登记与文件浏览](../docs/product/project-files.md)。
+`apps/macos/` 是 SwiftUI macOS 应用入口，依赖本地 `AgentIDEProtocol` Swift Package。应用登记并保存稳定的本机设备身份，生成短期配对二维码，管理已配对的 iPhone 和 Agent Host 中的本机项目。它持有 Mac 唯一的 Relay 连接，通过该连接响应项目与会话请求，并按目标设备和会话游标重传未确认的 Agent 事件。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，项目行为见 [项目登记与文件浏览](../docs/product/project-files.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外入口：
 
@@ -10,7 +10,7 @@
 
 ## iOS 客户端
 
-`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并在 Mac 在线时取得项目列表、按需展开项目文件树，以及只读查看文本和同目录图片。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)。
+`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并在 Mac 在线时取得项目列表、按需展开项目文件树、只读查看文本和同目录图片。它还解码并确认 Agent 事件，保存每个会话的最后序列号，并在重连时续订未结束的事件流。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外入口：
 
@@ -40,14 +40,16 @@
 
 ## Agent Host
 
-`apps/agent-host/` 是 Mac 本地 Agent 执行进程的组合边界。它持久化 Mac 明确登记的项目，通过本地 HTTP IPC 提供项目管理和受根目录约束的文件访问；`AgentHost` 继续通过依赖注入组合文件访问、Relay 连接和具体 Agent 集成。项目与文件访问规则见 [项目登记与文件浏览](../docs/product/project-files.md)。
+`apps/agent-host/` 是 Mac 本地 Agent 执行进程的组合边界。它持久化 Mac 明确登记的项目、统一会话和规范化事件，通过本地 HTTP IPC 提供项目管理、会话管理和受根目录约束的文件访问；`AgentHost` 继续通过依赖注入组合文件访问、Relay 连接和具体 Agent 集成。项目与文件访问规则见 [项目登记与文件浏览](../docs/product/project-files.md)，会话执行与恢复规则见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外接口：
 
 - `FileService`：定义 `list()`、`readText()`、`readBinary()` 和 `listSiblingImages()` 文件访问边界。
 - `LocalFileService`：`FileService` 的本地文件系统实现，提供目录列举、文本读取、二进制读取和同目录图片列举。
 - `ProjectStore`：持久化项目登记，提供 `list()`、`get()`、`add()`、`rename()` 和 `remove()`；登记时检测 `PATH` 中可执行的 Claude Code 与 Codex。
-- `createAgentHostServer()`：创建承载项目与文件 IPC 的未监听端口 Node HTTP server。
+- `SessionStore`：持久化统一会话元数据和按会话分隔的 JSONL 事件日志，并按稳定序列号查询事件。
+- `SessionManager`、`CreateManagedSession`：创建或恢复 Agent 会话，串行化会话操作，并把 Adapter 事件写入 `SessionStore`。
+- `createAgentHostServer()`：创建承载项目、文件和会话 IPC 的未监听端口 Node HTTP server。
 - `RelayClient`：建立/断开 Relay 连接并发送 Envelope。
 - `RelayClientOptions`：配置 Relay URL、设备凭据、重连基准延迟和消息回调。
 - `ReconnectingRelayClient`：带最多 100 条待发送队列和最长 30 秒指数退避的 WebSocket 客户端。
@@ -57,10 +59,15 @@
 - `GET /health`：返回 Agent Host 进程健康状态。
 - `GET /projects`、`POST /projects`：列出项目登记，或登记一个本机目录。
 - `PATCH /projects/:projectId`、`DELETE /projects/:projectId`：修改项目显示名，或删除项目登记。
+- `GET /sessions`、`POST /sessions`：按可选项目筛选会话，或为已登记项目创建会话并发送可选初始任务。
+- `GET /sessions/:sessionId`：取得一个统一会话。
+- `GET /sessions/:sessionId/events`：按可选 `afterSequence` 读取持久化事件。
+- `POST /sessions/:sessionId/messages`、`POST /sessions/:sessionId/cancel`：发送后续文本消息，或取消当前轮次。
+- `POST /sessions/:sessionId/interactions`：以 `approve_once`、`approve_session` 或 `reject` 回应待处理审批。
 - `POST /projects/:projectId/files/list`：列出项目根目录或其子目录。
 - `POST /projects/:projectId/files/read-text`、`POST /projects/:projectId/files/read-binary`：读取项目内文本，或以 Base64 返回二进制文件。
 - `POST /projects/:projectId/files/list-images`：列出指定文件同目录的图片。
-- `pnpm --filter @agentide/agent-host start`：默认监听 `127.0.0.1:8788`，可用 `AGENT_HOST_PORT` 覆盖端口；项目登记默认写入 `~/Library/Application Support/AgentIDE/projects.json`，可用 `AGENTIDE_DATA_DIR` 覆盖数据目录。
+- `pnpm --filter @agentide/agent-host start`：默认监听 `127.0.0.1:8788`，可用 `AGENT_HOST_PORT` 覆盖端口；项目登记与会话数据默认写入 `~/Library/Application Support/AgentIDE/`，可用 `AGENTIDE_DATA_DIR` 覆盖数据目录。
 
 文件访问实现边界：
 

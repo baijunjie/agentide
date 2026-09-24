@@ -65,6 +65,8 @@ final class MobileConnection: ObservableObject {
     private var pendingRequests: [String: PendingRequest] = [:]
     private var pendingTimeouts: [String: Task<Void, Never>] = [:]
     private var activeImageKeys: Set<String> = []
+    private var sessionProjects: [String: String]
+    private var sessionEventSequences: [String: Int]
     private let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 3
@@ -73,6 +75,8 @@ final class MobileConnection: ObservableObject {
     }()
 
     init() {
+        sessionProjects = UserDefaults.standard.dictionary(forKey: "sessionProjects") as? [String: String] ?? [:]
+        sessionEventSequences = UserDefaults.standard.dictionary(forKey: "sessionEventSequences") as? [String: Int] ?? [:]
         if let id = UserDefaults.standard.string(forKey: "deviceId") { deviceId = id }
         else { let id = UUID().uuidString; deviceId = id; UserDefaults.standard.set(id, forKey: "deviceId") }
         if let server = UserDefaults.standard.string(forKey: "relayServer"), let token = CredentialStore.token(for: server) {
@@ -191,7 +195,7 @@ final class MobileConnection: ObservableObject {
         if type == "system.presence", let payload = message["payload"] as? [String: Any] {
             online = payload["online"] as? Bool ?? false
             macDeviceId = message["sourceDeviceId"] as? String
-            if online { requestProjects() }
+            if online { requestProjects(); resubscribeSessions() }
             else { failAllPending(message: "Mac is offline") }
             return
         }
@@ -205,6 +209,20 @@ final class MobileConnection: ObservableObject {
         guard let payload = message["payload"], JSONSerialization.isValidJSONObject(payload),
               let payloadData = try? JSONSerialization.data(withJSONObject: payload) else {
             if let replyTo { finishPending(replyTo, error: "Invalid response") }
+            return
+        }
+        if type == "agent.event", let source = message["sourceDeviceId"] as? String,
+           let projectId = message["projectId"] as? String, let sessionId = message["sessionId"] as? String,
+           let value = payload as? [String: Any], let sequence = value["sequence"] as? Int,
+           let event = try? JSONDecoder().decode(AgentEvent.self, from: payloadData) {
+            switch event {
+            case .turnCompleted, .sessionCompleted: sessionProjects.removeValue(forKey: sessionId)
+            default: sessionProjects[sessionId] = projectId
+            }
+            sessionEventSequences[sessionId] = max(sessionEventSequences[sessionId] ?? -1, sequence)
+            UserDefaults.standard.set(sessionProjects, forKey: "sessionProjects")
+            UserDefaults.standard.set(sessionEventSequences, forKey: "sessionEventSequences")
+            send(type: "agent.event.ack", target: source, projectId: projectId, sessionId: sessionId, payload: ["sequence": sequence])
             return
         }
         var handled = false
@@ -242,11 +260,13 @@ final class MobileConnection: ObservableObject {
         if let replyTo { finishPending(replyTo, error: handled ? nil : "Invalid response") }
     }
 
-    private func send(type: String, target: String, projectId: String? = nil, payload: [String: Any], pending: PendingRequest? = nil) {
+    private func send(type: String, target: String, projectId: String? = nil, sessionId: String? = nil,
+                      payload: [String: Any], pending: PendingRequest? = nil) {
         let id = UUID().uuidString
         var message: [String: Any] = ["version": 1, "id": id, "type": type, "sourceDeviceId": deviceId,
                                       "targetDeviceId": target, "timestamp": ISO8601DateFormatter().string(from: Date()), "payload": payload]
         if let projectId { message["projectId"] = projectId }
+        if let sessionId { message["sessionId"] = sessionId }
         if let pending {
             pendingRequests[id] = pending
             pendingTimeouts[id] = Task { [weak self] in
@@ -283,6 +303,14 @@ final class MobileConnection: ObservableObject {
 
     private func failAllPending(message: String) {
         for id in Array(pendingRequests.keys) { finishPending(id, error: message) }
+    }
+
+    private func resubscribeSessions() {
+        guard let macDeviceId else { return }
+        for (sessionId, projectId) in sessionProjects {
+            send(type: "session.subscribe", target: macDeviceId, projectId: projectId, sessionId: sessionId,
+                 payload: ["afterSequence": sessionEventSequences[sessionId] ?? -1])
+        }
     }
 
     private func fileKey(projectId: String, path: String) -> String { "\(projectId):\(path)" }

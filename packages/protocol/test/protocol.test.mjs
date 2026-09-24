@@ -99,7 +99,7 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   }
 
   const agentEvents = await readJson(fixtureUrl("agent-events"));
-  assert.equal(agentEvents.length, 12);
+  assert.equal(agentEvents.length, 13);
   for (const event of agentEvents) {
     assert.equal(validateAgentEvent(event), true, JSON.stringify(validateAgentEvent.errors));
   }

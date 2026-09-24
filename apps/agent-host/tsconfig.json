@@ -8,6 +8,7 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../../packages/agent-codex" },
     { "path": "../../packages/agent-core" },
     { "path": "../../packages/protocol" },
     { "path": "../../packages/shared-types" }

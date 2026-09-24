@@ -14,6 +14,7 @@
     { "$ref": "#/$defs/questionRequested" },
     { "$ref": "#/$defs/status" },
     { "$ref": "#/$defs/error" },
+    { "$ref": "#/$defs/turnCompleted" },
     { "$ref": "#/$defs/sessionCompleted" }
   ],
   "$defs": {
@@ -123,7 +124,7 @@
     "status": {
       "allOf": [
         { "$ref": "#/$defs/base" },
-        { "type": "object", "required": ["status"], "properties": { "type": { "const": "status" }, "status": { "enum": ["running", "waiting_user"] }, "message": { "type": "string" } } }
+        { "type": "object", "required": ["status"], "properties": { "type": { "const": "status" }, "status": { "enum": ["running", "idle", "waiting_user"] }, "message": { "type": "string" } } }
       ]
     },
     "error": {
@@ -136,6 +137,12 @@
       "allOf": [
         { "$ref": "#/$defs/base" },
         { "type": "object", "required": ["outcome"], "properties": { "type": { "const": "session.completed" }, "outcome": { "enum": ["completed", "failed", "cancelled"] } } }
+      ]
+    },
+    "turnCompleted": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "required": ["outcome"], "properties": { "type": { "const": "turn.completed" }, "outcome": { "enum": ["completed", "failed", "cancelled"] } } }
       ]
     }
   }

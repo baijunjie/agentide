@@ -1,6 +1,6 @@
 # Agent 会话执行与事件投递
 
-Agent 会话由 Mac 上的 Agent Host 执行和持久化。iPhone 通过已配对设备之间的 Relay 消息创建会话、发送后续消息、取消当前轮次和回应审批，并以带确认的事件流取得执行结果。Relay 只负责路由 Envelope，不运行 Agent，也不保存会话记录。
+Agent 会话由 Mac 上的 Agent Host 执行和持久化。iPhone 通过已配对设备之间的 Relay 消息创建会话、发送后续消息、取消当前轮次和回应审批或问题，并以带确认的事件流取得执行结果。Relay 只负责路由 Envelope，不运行 Agent，也不保存会话记录。
 
 统一事件字段和 Adapter 接口见 [三端通信与 Agent 契约](protocol.md)；设备鉴权、在线状态与 Relay 的短时离线缓冲见 [设备配对与 Relay 连接](device-pairing.md)。
 
@@ -10,7 +10,15 @@ Agent 会话由 Mac 上的 Agent Host 执行和持久化。iPhone 通过已配�
 - 会话可以包含多个顺序执行的轮次。同一会话的发送、取消和交互回应会串行执行；活动轮次结束后，会话进入 `idle`，仍可发送下一条消息。
 - `turn.completed` 表示一个轮次以 `completed`、`failed` 或 `cancelled` 结束。`session.completed` 只表示整个会话真正终止，不能用来表示一次普通轮次结束。
 - 发送消息的本地 IPC 只有在该轮次的 `status: running` 事件已经持久化后才返回成功。调用方因此可以在成功响应后立即按序列号读取到该轮次已开始的记录。
-- 取消只中断当前活动轮次；没有活动轮次时是幂等操作。当前 Codex 集成只接受文本输入，不接受附件。
+- 取消只中断当前活动轮次；没有活动轮次时是幂等操作。当前 Claude 与 Codex 集成都只接受文本输入，不接受附件。
+
+## Claude 执行与归一化
+
+Claude Adapter 通过 Claude Agent SDK 执行会话，声明支持审批、提问和原生会话恢复。新会话的统一会话 ID 同时作为 Claude 原生会话 ID；Agent Host 重启后，Adapter 会在下一轮发送前探测项目目录中的同名会话记录，已建立的会话按原生 ID 恢复，尚未真正启动的会话则以该 ID 启动首轮。
+
+Claude 的流式文本、完整消息、工具、命令、审批、提问、错误和轮次结果都会转换为统一 `AgentEvent`。`AskUserQuestion` 中的每个问题分别产生 `question.requested`，允许提交选项、自由文本或两者；一次原生请求包含多个问题时，全部得到回应后才继续执行。
+
+审批只暴露 SDK 当前请求允许的动作。会话级批准只应用于当前会话；SDK 禁止持久批准或没有提供相应权限建议时，不会暴露 `approve_session`。取消、完成或失败都会结束当前轮次并回到可继续发送消息的 `idle` 状态。
 
 ## Codex 执行与归一化
 
@@ -28,7 +36,7 @@ Agent Host 是会话元数据与规范化事件历史的本地权威来源：
 - Agent Host 按实际写入顺序为每个会话分配从 `0` 开始、严格递增且重启后稳定的 `sequence`。该持久化序列号是事件重放的唯一游标。
 - 事件读取接受 `afterSequence`，只返回该序列号之后的事件。
 - Agent Host 重启后，在下一次会话操作时用 `nativeSessionId` 恢复原生会话。
-- 等待审批时进程重启会使原生请求失效。Agent Host 在首次访问会话数据时记录可恢复错误和失败的 `turn.completed`，把会话恢复为 `idle`；旧交互回应会被明确拒绝，用户仍可开始新的轮次。
+- 等待审批或问题时进程重启会使原生请求失效。Agent Host 在首次访问会话数据时记录可恢复错误和失败的 `turn.completed`，把会话恢复为 `idle`；旧交互回应会被明确拒绝，用户仍可开始新的轮次。
 
 ## iPhone 事件投递
 

@@ -40,15 +40,15 @@
 
 ## Agent Host
 
-`apps/agent-host/` 是 Mac 本地 Agent 执行进程的组合边界。它持久化 Mac 明确登记的项目、统一会话和规范化事件，通过本地 HTTP IPC 提供项目管理、会话管理和受根目录约束的文件访问；`AgentHost` 继续通过依赖注入组合文件访问、Relay 连接和具体 Agent 集成。项目与文件访问规则见 [项目登记与文件浏览](../docs/product/project-files.md)，会话执行与恢复规则见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
+`apps/agent-host/` 是 Mac 本地 Agent 执行进程的组合边界。它持久化 Mac 明确登记的项目、统一会话和规范化事件，通过本地 HTTP IPC 提供项目管理、会话管理和受根目录约束的文件访问；本地组合默认装配 Claude 与 Codex Adapter，`AgentHost` 也可通过依赖注入组合文件访问、Relay 连接和具体 Agent 集成。项目与文件访问规则见 [项目登记与文件浏览](../docs/product/project-files.md)，会话执行与恢复规则见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外接口：
 
 - `FileService`：定义 `list()`、`readText()`、`readBinary()` 和 `listSiblingImages()` 文件访问边界。
 - `LocalFileService`：`FileService` 的本地文件系统实现，提供目录列举、文本读取、二进制读取和同目录图片列举。
-- `ProjectStore`：持久化项目登记，提供 `list()`、`get()`、`add()`、`rename()` 和 `remove()`；登记时检测 `PATH` 中可执行的 Claude Code 与 Codex。
+- `ProjectStore`：持久化项目登记，提供 `list()`、`get()`、`add()`、`rename()` 和 `remove()`；随包可用的 Claude 始终启用，Codex 则按 `PATH` 中的可执行文件检测。
 - `SessionStore`：持久化统一会话元数据和按会话分隔的 JSONL 事件日志，并按稳定序列号查询事件。
-- `SessionManager`、`CreateManagedSession`：创建或恢复 Agent 会话，串行化会话操作，并把 Adapter 事件写入 `SessionStore`。
+- `SessionManager`、`CreateManagedSession`：通过统一边界创建或恢复 Claude/Codex 会话，串行化会话操作，并把 Adapter 事件写入 `SessionStore`。
 - `createAgentHostServer()`：创建承载项目、文件和会话 IPC 的未监听端口 Node HTTP server。
 - `RelayClient`：建立/断开 Relay 连接并发送 Envelope。
 - `RelayClientOptions`：配置 Relay URL、设备凭据、重连基准延迟和消息回调。
@@ -63,7 +63,7 @@
 - `GET /sessions/:sessionId`：取得一个统一会话。
 - `GET /sessions/:sessionId/events`：按可选 `afterSequence` 读取持久化事件。
 - `POST /sessions/:sessionId/messages`、`POST /sessions/:sessionId/cancel`：发送后续文本消息，或取消当前轮次。
-- `POST /sessions/:sessionId/interactions`：以 `approve_once`、`approve_session` 或 `reject` 回应待处理审批。
+- `POST /sessions/:sessionId/interactions`：回应待处理审批或问题；审批使用 `approve_once`、`approve_session` 或 `reject`，问题可提交选项 ID、自由文本或两者。
 - `POST /projects/:projectId/files/list`：列出项目根目录或其子目录。
 - `POST /projects/:projectId/files/read-text`、`POST /projects/:projectId/files/read-binary`：读取项目内文本，或以 Base64 返回二进制文件。
 - `POST /projects/:projectId/files/list-images`：列出指定文件同目录的图片。

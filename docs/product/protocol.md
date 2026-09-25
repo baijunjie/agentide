@@ -72,7 +72,7 @@ macOS、iOS、Relay Server 与 Agent Host 通过同一套版本化 JSON 契约�
 
 Adapter 类型只能是 `claude` 或 `codex`。上层以统一会话 ID 调用 Adapter；Agent 自己的会话标识单独保存在 `nativeSessionId`，不替代统一会话 ID。
 
-Codex 的现行能力、会话恢复以及统一事件的持久化和远程投递规则见 [Agent 会话执行与事件投递](agent-sessions.md)。
+Claude 与 Codex 的现行能力、会话恢复以及统一事件的持久化和远程投递规则见 [Agent 会话执行与事件投递](agent-sessions.md)。
 
 ## 共享业务对象
 

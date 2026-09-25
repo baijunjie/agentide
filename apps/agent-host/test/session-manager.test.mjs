@@ -19,12 +19,12 @@ class EventQueue {
 }
 
 class FakeAdapter {
-  type = "codex";
   queues = new Map();
   sent = [];
   resumed = [];
   interactions = [];
-  capabilities() { return { approvals: true, questions: false, resumeSession: true }; }
+  constructor(type = "codex") { this.type = type; }
+  capabilities() { return { approvals: true, questions: this.type === "claude", resumeSession: true }; }
   async createSession(options) {
     const queue = new EventQueue();
     this.queues.set(options.sessionId, queue);
@@ -32,7 +32,7 @@ class FakeAdapter {
     return {
       id: options.sessionId,
       projectId: options.projectId,
-      agentType: "codex",
+      agentType: this.type,
       nativeSessionId: "native-1",
       title: options.initialPrompt,
       status: "starting",
@@ -47,7 +47,7 @@ class FakeAdapter {
     return {
       id: nativeSessionId,
       projectId: "",
-      agentType: "codex",
+      agentType: this.type,
       nativeSessionId,
       title: "resumed",
       status: "running",
@@ -137,6 +137,38 @@ test("local IPC exposes the unified session operation boundary", async (context)
   await json(`${base}/sessions/session-1/cancel`, "POST", {}, 204);
   await json(`${base}/sessions/session-1/interactions`, "POST", { kind: "approval", interactionId: "42", action: "approve_once" }, 204);
   assert.deepEqual(calls.at(-1), ["respond", "session-1", "42", { kind: "approval", action: "approve_once" }]);
+  await json(`${base}/sessions/session-1/interactions`, "POST", { kind: "question", interactionId: "q1", optionIds: ["option-1"], freeText: "details" }, 204);
+  assert.deepEqual(calls.at(-1), ["respond", "session-1", "q1", { kind: "question", optionIds: ["option-1"], freeText: "details" }]);
+});
+
+test("session manager persists and expires Claude questions through the shared interaction boundary", async (context) => {
+  const base = await mkdtemp(join(tmpdir(), "agentide-claude-sessions-"));
+  context.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, "project");
+  await mkdir(root);
+  const projects = new ProjectStore(join(base, "projects.json"), "");
+  const project = await projects.add(root);
+  const sessionPath = join(base, "sessions.json");
+  const adapter = new FakeAdapter("claude");
+  const manager = new SessionManager(projects, new SessionStore(sessionPath), new Map([["claude", adapter]]));
+  const session = await manager.create({ projectId: project.id, agentType: "claude", initialPrompt: "Ask me" });
+  await waitFor(async () => (await manager.events(session.id)).some((value) => value.type === "status"));
+  adapter.queues.get(session.id).push(event(session.id, "question.requested", {
+    interactionId: "question-1",
+    question: "Theme?",
+    options: [{ id: "dark", label: "Dark" }],
+    allowFreeText: true,
+  }));
+  adapter.queues.get(session.id).push(event(session.id, "status", { status: "waiting_user" }));
+  await waitFor(async () => (await manager.get(session.id)).status === "waiting_user");
+
+  const resumedAdapter = new FakeAdapter("claude");
+  const restarted = new SessionManager(projects, new SessionStore(sessionPath), new Map([["claude", resumedAdapter]]));
+  await assert.rejects(
+    restarted.respond(session.id, "question-1", { kind: "question", optionIds: ["dark"] }),
+    /Interaction expired/,
+  );
+  assert.ok((await restarted.events(session.id)).some((value) => value.code === "agent_interaction_expired"));
 });
 
 test("session store does not expose a mutation when atomic persistence fails", async (context) => {
@@ -163,16 +195,18 @@ test("session store derives state from atomic events and ignores a truncated JSO
   await store.create(session);
   await store.record(session.id, event(session.id, "approval.requested", { interactionId: "42", title: "Approve", actions: ["reject"] }));
   assert.equal((await new SessionStore(path).get(session.id)).status, "waiting_user");
+  await store.record(session.id, event(session.id, "question.requested", { interactionId: "q1", question: "Choose", allowFreeText: true }));
+  assert.equal((await new SessionStore(path).get(session.id)).status, "waiting_user");
   await store.record(session.id, event(session.id, "turn.completed", { outcome: "failed" }));
   const logPath = join(`${path}.events`, `${encodeURIComponent(session.id)}.jsonl`);
   await writeFile(logPath, `${await readFile(logPath, "utf8")}{"truncated":`, { mode: 0o600 });
   const recovered = new SessionStore(path);
   assert.equal((await recovered.get(session.id)).status, "idle");
-  assert.equal((await recovered.events(session.id)).length, 2);
+  assert.equal((await recovered.events(session.id)).length, 3);
   await recovered.record(session.id, event(session.id, "status", { status: "running" }));
   const restarted = new SessionStore(path);
   assert.equal((await restarted.get(session.id)).status, "running");
-  assert.equal((await restarted.events(session.id)).length, 3);
+  assert.equal((await restarted.events(session.id)).length, 4);
 });
 
 function event(sessionId, type, extra) {

@@ -80,7 +80,9 @@ export class ProjectStore {
     try {
       const value: unknown = JSON.parse(await readFile(this.filePath, "utf8"));
       if (!Array.isArray(value)) throw new Error("Project store must contain an array");
-      this.projects = value as Project[];
+      this.projects = (value as Project[]).map((project) => project.enabledAgents.includes("claude")
+        ? project
+        : { ...project, enabledAgents: ["claude", ...project.enabledAgents] });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       this.projects = [];
@@ -109,8 +111,7 @@ function normalizeName(value: string): string {
 }
 
 async function detectAgents(pathEnvironment: string): Promise<AgentType[]> {
-  const agents: AgentType[] = [];
-  if (await executableExists("claude", pathEnvironment)) agents.push("claude");
+  const agents: AgentType[] = ["claude"];
   if (await executableExists("codex", pathEnvironment)) agents.push("codex");
   return agents;
 }

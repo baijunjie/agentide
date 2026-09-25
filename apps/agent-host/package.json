@@ -5,6 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "dependencies": {
+    "@agentide/agent-claude": "workspace:*",
     "@agentide/agent-codex": "workspace:*",
     "@agentide/agent-core": "workspace:*",
     "@agentide/protocol": "workspace:*",

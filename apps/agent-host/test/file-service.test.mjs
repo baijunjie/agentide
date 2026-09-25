@@ -19,7 +19,7 @@ test("project registration persists metadata and detects available agents", asyn
 
   const project = await store.add(fixture.root);
   assert.equal(project.name, "project");
-  assert.deepEqual(project.enabledAgents, ["codex"]);
+  assert.deepEqual(project.enabledAgents, ["claude", "codex"]);
   assert.deepEqual((await new ProjectStore(fixture.storePath, "").list())[0], project);
 
   assert.equal((await store.rename(project.id, "Renamed")).name, "Renamed");
@@ -52,6 +52,20 @@ test("first load is shared with a concurrent registration", async (context) => {
   const [, project] = await Promise.all([store.list(), store.add(fixture.root)]);
   assert.deepEqual((await store.list()).map((value) => value.id), [project.id]);
   assert.deepEqual(JSON.parse(await readFile(fixture.storePath, "utf8")).map((value) => value.id), [project.id]);
+});
+
+test("existing projects gain the bundled Claude SDK capability", async (context) => {
+  const fixture = await createFixture(context);
+  await mkdir(join(fixture.base, "data"), { recursive: true });
+  await writeFile(fixture.storePath, JSON.stringify([{
+    id: "project-existing",
+    name: "Existing",
+    rootPath: fixture.root,
+    createdAt: "2026-09-24T00:00:00.000Z",
+    enabledAgents: [],
+  }]));
+  const [project] = await new ProjectStore(fixture.storePath, "").list();
+  assert.deepEqual(project.enabledAgents, ["claude"]);
 });
 
 test("file service lists safe entries and exposes internal read capabilities", async (context) => {

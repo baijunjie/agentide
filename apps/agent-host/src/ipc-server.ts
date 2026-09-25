@@ -84,12 +84,25 @@ async function route(
     if (operation === "interactions" && request.method === "POST") {
       const body = await readJSON(request);
       const kind = requireString(body, "kind");
-      if (kind !== "approval") throw new Error("Only approval interactions are supported");
-      const action = requireString(body, "action");
-      if (action !== "approve_once" && action !== "approve_session" && action !== "reject") {
-        throw new Error("Invalid approval action");
+      const interactionId = requireString(body, "interactionId");
+      if (kind === "approval") {
+        const action = requireString(body, "action");
+        if (action !== "approve_once" && action !== "approve_session" && action !== "reject") {
+          throw new Error("Invalid approval action");
+        }
+        await sessions.respond(sessionId, interactionId, { kind, action });
+      } else if (kind === "question") {
+        const optionIds = optionalStringArray(body, "optionIds");
+        const freeText = optionalString(body, "freeText");
+        if (optionIds === undefined && freeText === undefined) throw new Error("Question response must include optionIds or freeText");
+        await sessions.respond(sessionId, interactionId, {
+          kind,
+          ...(optionIds === undefined ? {} : { optionIds }),
+          ...(freeText === undefined ? {} : { freeText }),
+        });
+      } else {
+        throw new Error("Interaction kind must be approval or question");
       }
-      await sessions.respond(sessionId, requireString(body, "interactionId"), { kind, action });
       response.writeHead(204).end();
       return;
     }
@@ -147,6 +160,15 @@ function optionalString(body: Record<string, unknown>, key: string): string | un
   const value = body[key];
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw new Error(`${key} must be a string`);
+  return value;
+}
+
+function optionalStringArray(body: Record<string, unknown>, key: string): string[] | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new Error(`${key} must be an array of strings`);
+  }
   return value;
 }
 

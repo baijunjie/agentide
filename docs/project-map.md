@@ -22,7 +22,7 @@
 | `packages/shared-types/` | 项目、会话和文件条目的跨服务领域类型。 |
 | `packages/agent-core/` | Agent 能力、输入、交互响应、统一事件流与 `AgentAdapter` 接口。 |
 | `packages/agent-codex/` | `codex app-server` JSONL RPC 客户端及 Codex 到统一会话、事件和审批契约的适配器。 |
-| `packages/agent-claude/` | Claude 适配器的独立集成边界；当前仅导出适配器类型标识。 |
+| `packages/agent-claude/` | 基于 Claude Agent SDK 的 Claude Code 适配器，把会话、流式输出、工具、命令、审批和提问归一化为统一 Agent 契约。 |
 | `packages/crypto/` | 加密能力的独立边界；当前仅导出边界版本。 |
 
 ## 仓库基础设施

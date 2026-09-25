@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentAdapter, AgentEvent, AgentInput, InteractionResponse } from "@agentide/agent-core";
 import type { AgentType, Session } from "@agentide/shared-types";
+import { ClaudeAdapter } from "@agentide/agent-claude";
 import { CodexAdapter } from "@agentide/agent-codex";
 import { ProjectStore } from "./project-store.js";
 import { SessionStore } from "./session-store.js";
@@ -31,7 +32,10 @@ export class SessionManager {
     return new SessionManager(
       projects,
       new SessionStore(join(dataDirectory, "sessions.json")),
-      new Map<AgentType, AgentAdapter>([["codex", new CodexAdapter()]]),
+      new Map<AgentType, AgentAdapter>([
+        ["claude", new ClaudeAdapter()],
+        ["codex", new CodexAdapter()],
+      ]),
     );
   }
 
@@ -220,7 +224,8 @@ export class SessionManager {
       if (session.status === "waiting_user") {
         const events = await this.store.events(session.id);
         const interactionIds = events
-          .filter((event): event is Extract<AgentEvent, { type: "approval.requested" }> => event.type === "approval.requested")
+          .filter((event): event is Extract<AgentEvent, { type: "approval.requested" | "question.requested" }> =>
+            event.type === "approval.requested" || event.type === "question.requested")
           .map((event) => event.interactionId);
         this.expiredInteractions.set(session.id, new Set(interactionIds));
         await this.recordFailure(session.id, "agent_interaction_expired", new Error("Pending interaction expired when Agent Host restarted"));

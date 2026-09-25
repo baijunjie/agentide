@@ -248,14 +248,26 @@ final class MacConnection: ObservableObject {
         } else if type == "interaction.respond" {
             guard let sessionId = message["sessionId"] as? String,
                   let payload = message["payload"] as? [String: Any],
-                  let interactionId = payload["interactionId"] as? String,
-                  let action = payload["action"] as? String else {
+                  let interactionId = payload["interactionId"] as? String else {
                 sendResponse(to: source, replyTo: requestId, type: "interaction.respond.response", error: "Invalid interaction.respond request", errorCode: "session_request_failed")
                 return
             }
             do {
                 let session: Session = try await hostRequest("/sessions/\(sessionId)", method: "GET", body: Optional<String>.none)
-                let body = ["kind": "approval", "interactionId": interactionId, "action": action]
+                let kind = payload["kind"] as? String ?? (payload["action"] == nil ? "question" : "approval")
+                let body: InteractionResponseRequest
+                if kind == "approval", let action = payload["action"] as? String {
+                    body = InteractionResponseRequest(kind: kind, interactionId: interactionId, action: action)
+                } else if kind == "question" {
+                    let optionIds = payload["optionIds"] as? [String]
+                    let freeText = payload["freeText"] as? String
+                    guard optionIds != nil || freeText != nil else {
+                        throw NSError(domain: "AgentIDE", code: 400, userInfo: [NSLocalizedDescriptionKey: "Question response requires an option or free text"])
+                    }
+                    body = InteractionResponseRequest(kind: kind, interactionId: interactionId, optionIds: optionIds, freeText: freeText)
+                } else {
+                    throw NSError(domain: "AgentIDE", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid interaction response"])
+                }
                 let _: EmptyResponse = try await hostRequest("/sessions/\(sessionId)/interactions", method: "POST", body: body)
                 sendResponse(to: source, replyTo: requestId, type: "interaction.respond.response", projectId: session.projectId, payload: [:])
             } catch {
@@ -384,5 +396,12 @@ final class MacConnection: ObservableObject {
 }
 
 private struct EmptyResponse: Codable {}
+private struct InteractionResponseRequest: Encodable {
+    let kind: String
+    let interactionId: String
+    var action: String?
+    var optionIds: [String]?
+    var freeText: String?
+}
 private struct ErrorResponse: Decodable { let error: String }
 private func isSecure(_ url: URL) -> Bool { url.scheme == "https" || (url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost")) }

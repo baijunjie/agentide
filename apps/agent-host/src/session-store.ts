@@ -54,7 +54,7 @@ export class SessionStore {
       stored = { ...event, sessionId, sequence: (events.at(-1)?.sequence ?? -1) + 1 };
       const nextSession = { ...session, updatedAt: stored.timestamp };
       if (stored.type === "status") nextSession.status = stored.status;
-      else if (stored.type === "approval.requested") nextSession.status = "waiting_user";
+      else if (stored.type === "approval.requested" || stored.type === "question.requested") nextSession.status = "waiting_user";
       else if (stored.type === "turn.completed") nextSession.status = "idle";
       else if (stored.type === "session.completed") nextSession.status = stored.outcome;
       const sessions = [...data.sessions];
@@ -183,7 +183,7 @@ function deriveSession(session: Session, events: AgentEvent[]): Session {
   for (const event of events) {
     derived.updatedAt = event.timestamp;
     if (event.type === "status") derived.status = event.status;
-    else if (event.type === "approval.requested") derived.status = "waiting_user";
+    else if (event.type === "approval.requested" || event.type === "question.requested") derived.status = "waiting_user";
     else if (event.type === "turn.completed") derived.status = "idle";
     else if (event.type === "session.completed") derived.status = event.outcome;
   }
@@ -191,7 +191,7 @@ function deriveSession(session: Session, events: AgentEvent[]): Session {
 }
 
 function changesSessionStatus(event: AgentEvent): boolean {
-  return event.type === "status" || event.type === "approval.requested" || event.type === "turn.completed" || event.type === "session.completed";
+  return event.type === "status" || event.type === "approval.requested" || event.type === "question.requested" || event.type === "turn.completed" || event.type === "session.completed";
 }
 
 function parseEventLog(content: string): AgentEvent[] {

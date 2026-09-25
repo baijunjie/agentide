@@ -7,7 +7,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | `apps/macos/` | macOS SwiftUI 客户端，持有 Mac 设备身份与唯一 Relay 连接，管理配对设备和本机登记项目，把 iPhone 的项目与会话请求转交本地 Agent Host，并负责按设备和会话确认重传 Agent 事件；通过本地 Swift Package 依赖统一协议 DTO。 |
-| `apps/ios/` | iOS SwiftUI 客户端，扫描二维码完成设备绑定，显示 Mac 与项目在线状态，浏览项目文件，并确认和续订 Agent 会话事件流；通过本地 Swift Package 依赖统一协议 DTO。 |
+| `apps/ios/` | iOS SwiftUI 客户端，扫描二维码完成设备绑定，显示 Mac 与项目在线状态，列出和创建 Claude/Codex 会话，以统一 Activity Feed 承载消息、Agent 活动与用户交互，并可从会话工作流浏览项目文件；通过本地 Swift Package 依赖统一协议 DTO。 |
 | `apps/server/` | Node.js Relay Server，使用 PostgreSQL 持久化设备、配对会话与绑定，负责鉴权、Presence、心跳、绑定内 Envelope 路由和短时断线缓冲，不解释业务 payload。 |
 | `apps/agent-host/` | Mac 本地独立进程边界，持久化项目登记、统一会话和事件日志，通过本地 HTTP IPC 管理 Agent 会话，并以 native no-follow helper 提供受项目根目录约束的文件访问。 |
 

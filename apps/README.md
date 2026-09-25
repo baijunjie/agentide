@@ -10,7 +10,7 @@
 
 ## iOS 客户端
 
-`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并在 Mac 在线时取得项目列表、按需展开项目文件树、只读查看文本和同目录图片。它还解码并确认 Agent 事件，保存每个会话的最后序列号，并在重连时续订未结束的事件流。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
+`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并提供 Projects → Session List → Agent Session 主流程；会话界面负责创建 Claude/Codex 会话、呈现统一 Activity Feed、发送与取消轮次、回应审批和问题，并从会话工作流进入项目文件浏览。它还解码、排序并确认 Agent 事件，在连接恢复时续订未结束的事件流。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外入口：
 

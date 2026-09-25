@@ -38,7 +38,7 @@ struct MobileHomeView: View {
         }
         .refreshable { connection.requestProjects() }
         .navigationDestination(for: String.self) { id in
-            if let project = connection.projects.first(where: { $0.id == id }) { FileBrowserView(project: project) }
+            if let project = connection.projects.first(where: { $0.id == id }) { SessionListView(project: project) }
         }
     }
     private var pairingPrompt: some View {
@@ -51,7 +51,7 @@ struct MobileHomeView: View {
     }
 }
 
-private struct FileBrowserView: View {
+struct FileBrowserView: View {
     @EnvironmentObject private var connection: MobileConnection
     let project: RemoteProject
     @State private var expandedPaths: Set<String> = []

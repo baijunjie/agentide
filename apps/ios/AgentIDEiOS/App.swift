@@ -21,6 +21,8 @@ struct RemoteProject: Codable, Identifiable {
 }
 private struct ProjectListPayload: Decodable { let projects: [RemoteProject] }
 private struct FileListPayload: Decodable { let relativePath: String; let entries: [FileEntry] }
+private struct SessionListPayload: Decodable { let sessions: [Session] }
+private struct SessionCreatePayload: Decodable { let session: Session }
 struct RemoteFileContent: Decodable {
     enum Encoding: String, Decodable { case utf8, base64 }
     let relativePath: String
@@ -35,6 +37,11 @@ private struct DecodedImage: @unchecked Sendable {
     let image: UIImage
     let cost: Int
 }
+struct AcceptedMessage: Equatable {
+    let id = UUID()
+    let sessionId: String
+    let content: String
+}
 
 @MainActor
 final class MobileConnection: ObservableObject {
@@ -44,6 +51,31 @@ final class MobileConnection: ObservableObject {
         case text(String)
         case image(String)
         case imageList(String)
+        case sessionList(String)
+        case sessionCreate(String)
+        case sessionSend(String, String, String)
+        case sessionCancel(String, String)
+        case sessionSubscribe(String, String)
+        case interaction(String, String, String)
+
+        var responseType: String {
+            switch self {
+            case .directory: "project.listFiles.response"
+            case .text, .image: "project.readFile.response"
+            case .imageList: "project.listImages.response"
+            case .sessionList: "session.list.response"
+            case .sessionCreate: "session.create.response"
+            case .sessionSend: "session.sendMessage.response"
+            case .sessionCancel: "session.cancel.response"
+            case .sessionSubscribe: "session.subscribe.response"
+            case .interaction: "interaction.respond.response"
+            }
+        }
+
+        var isInteraction: Bool {
+            if case .interaction = self { return true }
+            return false
+        }
     }
     @Published var online = false
     @Published var paired = false
@@ -57,6 +89,20 @@ final class MobileConnection: ObservableObject {
     @Published var directoryErrors: [String: String] = [:]
     @Published var fileErrors: [String: String] = [:]
     @Published var imageListErrors: [String: String] = [:]
+    @Published var sessions: [String: [Session]] = [:]
+    @Published var sessionEvents: [String: [AgentEvent]] = [:]
+    @Published var sessionFeedItems: [String: [FeedItem]] = [:]
+    @Published var eventSessionStatuses: [String: SessionStatus] = [:]
+    @Published var historicallyResolvedInteractions: Set<String> = []
+    @Published var loadingSessionProjects: Set<String> = []
+    @Published var activeSessionOperations: Set<String> = []
+    @Published var subscribingSessions: Set<String> = []
+    @Published var respondingInteractions: Set<String> = []
+    @Published var submittedInteractions: Set<String>
+    @Published var resolvedInteractions: Set<String> = []
+    @Published var sessionErrors: [String: String] = [:]
+    @Published var createdSession: Session?
+    @Published var acceptedMessage: AcceptedMessage?
     @Published private var imageRevision = 0
     @Published var error: String?
     private let deviceId: String
@@ -67,6 +113,7 @@ final class MobileConnection: ObservableObject {
     private var activeImageKeys: Set<String> = []
     private var sessionProjects: [String: String]
     private var sessionEventSequences: [String: Int]
+    private var pendingEventInteractions: [String: Set<String>] = [:]
     private let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 3
@@ -76,7 +123,10 @@ final class MobileConnection: ObservableObject {
 
     init() {
         sessionProjects = UserDefaults.standard.dictionary(forKey: "sessionProjects") as? [String: String] ?? [:]
-        sessionEventSequences = UserDefaults.standard.dictionary(forKey: "sessionEventSequences") as? [String: Int] ?? [:]
+        sessionEventSequences = [:]
+        submittedInteractions = Set(UserDefaults.standard.stringArray(forKey: "submittedInteractions") ?? [])
+        resolvedInteractions = Set(UserDefaults.standard.stringArray(forKey: "resolvedInteractions") ?? [])
+        UserDefaults.standard.removeObject(forKey: "sessionEventSequences")
         if let id = UserDefaults.standard.string(forKey: "deviceId") { deviceId = id }
         else { let id = UUID().uuidString; deviceId = id; UserDefaults.standard.set(id, forKey: "deviceId") }
         if let server = UserDefaults.standard.string(forKey: "relayServer"), let token = CredentialStore.token(for: server) {
@@ -102,6 +152,91 @@ final class MobileConnection: ObservableObject {
         guard online, let macDeviceId else { return }
         send(type: "project.list", target: macDeviceId, payload: [:])
     }
+
+    func requestSessions(projectId: String) {
+        guard online, let macDeviceId else { sessionErrors[projectId] = "Mac is offline"; return }
+        guard !loadingSessionProjects.contains(projectId) else { return }
+        sessionErrors.removeValue(forKey: projectId)
+        loadingSessionProjects.insert(projectId)
+        send(type: "session.list", target: macDeviceId, projectId: projectId, payload: [:], pending: .sessionList(projectId))
+    }
+
+    func createSession(projectId: String, agentType: AgentType, initialTask: String) {
+        let task = initialTask.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !task.isEmpty else { sessionErrors[projectId] = "Enter an initial task"; return }
+        guard online, let macDeviceId else { sessionErrors[projectId] = "Mac is offline"; return }
+        let operation = "create:\(projectId)"
+        guard !activeSessionOperations.contains(operation) else { return }
+        sessionErrors.removeValue(forKey: projectId)
+        activeSessionOperations.insert(operation)
+        send(type: "session.create", target: macDeviceId, projectId: projectId,
+             payload: ["agentType": agentType.rawValue, "initialTask": task], pending: .sessionCreate(projectId))
+    }
+
+    func openSession(_ session: Session) {
+        sessionProjects[session.id] = session.projectId
+        persistSessionCursors()
+        subscribe(sessionId: session.id, projectId: session.projectId)
+    }
+
+    @discardableResult
+    func sendMessage(session: Session, content: String) -> Bool {
+        let message = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return false }
+        guard online, let macDeviceId else { sessionErrors[session.id] = "Mac is offline"; return false }
+        let operation = "send:\(session.id)"
+        guard !activeSessionOperations.contains(operation) else { return false }
+        sessionProjects[session.id] = session.projectId
+        persistSessionCursors()
+        sessionErrors.removeValue(forKey: session.id)
+        activeSessionOperations.insert(operation)
+        send(type: "session.sendMessage", target: macDeviceId, projectId: session.projectId, sessionId: session.id,
+             payload: ["content": message, "afterSequence": sessionEventSequences[session.id] ?? -1], pending: .sessionSend(session.projectId, session.id, message))
+        return true
+    }
+
+    func cancel(session: Session) {
+        guard online, let macDeviceId else { sessionErrors[session.id] = "Mac is offline"; return }
+        let operation = "cancel:\(session.id)"
+        guard !activeSessionOperations.contains(operation) else { return }
+        sessionErrors.removeValue(forKey: session.id)
+        activeSessionOperations.insert(operation)
+        send(type: "session.cancel", target: macDeviceId, projectId: session.projectId, sessionId: session.id,
+             payload: [:], pending: .sessionCancel(session.projectId, session.id))
+    }
+
+    func respondToApproval(session: Session, interactionId: String, action: ApprovalAction) {
+        respond(session: session, interactionId: interactionId,
+                payload: ["kind": "approval", "interactionId": interactionId, "action": action.rawValue])
+    }
+
+    func respondToQuestion(session: Session, interactionId: String, optionIds: [String], freeText: String?) {
+        var payload: [String: Any] = ["kind": "question", "interactionId": interactionId]
+        if !optionIds.isEmpty { payload["optionIds"] = optionIds }
+        if let freeText, !freeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["freeText"] = freeText.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard payload["optionIds"] != nil || payload["freeText"] != nil else { return }
+        respond(session: session, interactionId: interactionId, payload: payload)
+    }
+
+    func isResponding(sessionId: String, interactionId: String) -> Bool {
+        respondingInteractions.contains(interactionKey(sessionId: sessionId, interactionId: interactionId))
+    }
+
+    func isSubmitted(sessionId: String, interactionId: String) -> Bool {
+        submittedInteractions.contains(interactionKey(sessionId: sessionId, interactionId: interactionId))
+    }
+
+    func isResolved(sessionId: String, interactionId: String) -> Bool {
+        resolvedInteractions.contains(interactionKey(sessionId: sessionId, interactionId: interactionId))
+    }
+
+    func isHistoricallyResolved(sessionId: String, interactionId: String) -> Bool {
+        historicallyResolvedInteractions.contains(interactionKey(sessionId: sessionId, interactionId: interactionId))
+    }
+
+    func status(for session: Session) -> SessionStatus { eventSessionStatuses[session.id] ?? session.status }
 
     func requestFiles(projectId: String, relativePath: String) {
         let key = fileKey(projectId: projectId, path: relativePath)
@@ -183,7 +318,13 @@ final class MobileConnection: ObservableObject {
                 self.failAllPending(message: "Connection lost")
                 if task.closeCode.rawValue == 4003 {
                     CredentialStore.delete(for: server); self.paired = false; self.projects = []; self.files = [:]
-                    self.fileContents = [:]; self.imageLists = [:]; self.imageCache.removeAllObjects(); self.socket = nil; return
+                    self.fileContents = [:]; self.imageLists = [:]; self.sessions = [:]; self.sessionEvents = [:]
+                    self.sessionFeedItems = [:]; self.eventSessionStatuses = [:]; self.historicallyResolvedInteractions = []
+                    self.pendingEventInteractions = [:]
+                    self.sessionProjects = [:]; self.sessionEventSequences = [:]
+                    self.submittedInteractions = []; self.resolvedInteractions = []
+                    self.persistSessionCursors(); self.persistInteractionStates()
+                    self.imageCache.removeAllObjects(); self.socket = nil; return
                 }
                 try? await Task.sleep(for: .seconds(1)); guard self.socket === task else { return }; self.connect(server: server, token: token)
             }
@@ -200,6 +341,12 @@ final class MobileConnection: ObservableObject {
             return
         }
         let replyTo = message["replyTo"] as? String
+        if let replyTo, let pending = pendingRequests[replyTo],
+           !matchesResponse(pending, type: type, source: message["sourceDeviceId"] as? String,
+                            projectId: message["projectId"] as? String, sessionId: message["sessionId"] as? String) {
+            finishPending(replyTo, error: "Invalid response")
+            return
+        }
         if message["ok"] as? Bool == false {
             let message = (message["error"] as? [String: Any])?["message"] as? String ?? "Project request failed"
             if let replyTo { finishPending(replyTo, error: message) }
@@ -215,19 +362,56 @@ final class MobileConnection: ObservableObject {
            let projectId = message["projectId"] as? String, let sessionId = message["sessionId"] as? String,
            let value = payload as? [String: Any], let sequence = value["sequence"] as? Int,
            let event = try? JSONDecoder().decode(AgentEvent.self, from: payloadData) {
-            switch event {
-            case .turnCompleted, .sessionCompleted: sessionProjects.removeValue(forKey: sessionId)
-            default: sessionProjects[sessionId] = projectId
+            if case .sessionCompleted = event { sessionProjects.removeValue(forKey: sessionId) }
+            else { sessionProjects[sessionId] = projectId }
+            var events = sessionEvents[sessionId] ?? []
+            if events.last?.sequence == sequence {
+                // A lost ACK can cause the Mac to redeliver the latest event.
+            } else if events.last?.sequence ?? -1 < sequence {
+                events.append(event)
+                sessionEvents[sessionId] = events
+                var feed = sessionFeedItems[sessionId] ?? []
+                appendFeedEvent(event, to: &feed)
+                sessionFeedItems[sessionId] = feed
+                updateDerivedSessionState(event, sessionId: sessionId)
+            } else if !events.contains(where: { $0.sequence == sequence }) {
+                let index = events.firstIndex(where: { $0.sequence > sequence }) ?? events.endIndex
+                events.insert(event, at: index)
+                sessionEvents[sessionId] = events
+                sessionFeedItems[sessionId] = feedItems(events)
+                rebuildDerivedSessionState(sessionId: sessionId, events: events)
             }
             sessionEventSequences[sessionId] = max(sessionEventSequences[sessionId] ?? -1, sequence)
-            UserDefaults.standard.set(sessionProjects, forKey: "sessionProjects")
-            UserDefaults.standard.set(sessionEventSequences, forKey: "sessionEventSequences")
+            persistSessionCursors()
             send(type: "agent.event.ack", target: source, projectId: projectId, sessionId: sessionId, payload: ["sequence": sequence])
             return
         }
         var handled = false
         if type == "project.list.response", let response = try? JSONDecoder().decode(ProjectListPayload.self, from: payloadData) {
             projects = response.projects; handled = true
+        } else if type == "session.list.response", let projectId = message["projectId"] as? String,
+                  let response = try? JSONDecoder().decode(SessionListPayload.self, from: payloadData) {
+            if let replyTo, case let .some(.sessionList(expectedProjectId)) = pendingRequests[replyTo], expectedProjectId == projectId {
+                sessions[projectId] = response.sessions.sorted { $0.updatedAt > $1.updatedAt }
+                handled = true
+            }
+        } else if type == "session.create.response", let projectId = message["projectId"] as? String,
+                  let response = try? JSONDecoder().decode(SessionCreatePayload.self, from: payloadData) {
+            if let replyTo, case let .some(.sessionCreate(expectedProjectId)) = pendingRequests[replyTo], expectedProjectId == projectId {
+                guard message["sessionId"] as? String == response.session.id else {
+                    finishPending(replyTo, error: "Invalid response")
+                    return
+                }
+                var values = sessions[projectId] ?? []
+                values.removeAll { $0.id == response.session.id }
+                values.insert(response.session, at: 0)
+                sessions[projectId] = values
+                createdSession = response.session
+                openSession(response.session)
+                handled = true
+            }
+        } else if type == "session.sendMessage.response" || type == "session.cancel.response" || type == "session.subscribe.response" || type == "interaction.respond.response" {
+            handled = replyTo.flatMap { pendingRequests[$0] } != nil
         } else if type == "project.listFiles.response", let projectId = message["projectId"] as? String,
                   let response = try? JSONDecoder().decode(FileListPayload.self, from: payloadData) {
             let key = fileKey(projectId: projectId, path: response.relativePath)
@@ -276,16 +460,16 @@ final class MobileConnection: ObservableObject {
             }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: message), let text = String(data: data, encoding: .utf8), let socket else {
-            if pending != nil { finishPending(id, error: "Not connected") }
+            if let pending { finishPending(id, error: "Not connected", clearInteractionSubmission: pending.isInteraction) }
             return
         }
         socket.send(.string(text)) { [weak self] sendError in
             guard let sendError else { return }
-            Task { @MainActor in self?.finishPending(id, error: sendError.localizedDescription) }
+            Task { @MainActor in self?.finishPending(id, error: sendError.localizedDescription, clearInteractionSubmission: pending?.isInteraction == true) }
         }
     }
 
-    private func finishPending(_ id: String, error message: String?) {
+    private func finishPending(_ id: String, error message: String?, clearInteractionSubmission: Bool = false) {
         guard let pending = pendingRequests.removeValue(forKey: id) else { return }
         pendingTimeouts.removeValue(forKey: id)?.cancel()
         switch pending {
@@ -298,6 +482,43 @@ final class MobileConnection: ObservableObject {
         case let .imageList(key):
             loadingImageLists.remove(key)
             if let message { imageListErrors[key] = message }
+        case let .sessionList(projectId):
+            loadingSessionProjects.remove(projectId)
+            if let message { sessionErrors[projectId] = message }
+        case let .sessionCreate(projectId):
+            activeSessionOperations.remove("create:\(projectId)")
+            if let message { sessionErrors[projectId] = message }
+        case let .sessionSend(_, sessionId, content):
+            activeSessionOperations.remove("send:\(sessionId)")
+            if let message { sessionErrors[sessionId] = message }
+            else {
+                eventSessionStatuses[sessionId] = .running
+                acceptedMessage = AcceptedMessage(sessionId: sessionId, content: content)
+            }
+        case let .sessionCancel(_, sessionId):
+            activeSessionOperations.remove("cancel:\(sessionId)")
+            if let message { sessionErrors[sessionId] = message }
+        case let .sessionSubscribe(_, sessionId):
+            subscribingSessions.remove(sessionId)
+            if let message { sessionErrors[sessionId] = message }
+            else { sessionErrors.removeValue(forKey: sessionId) }
+        case let .interaction(_, sessionId, interactionId):
+            let key = interactionKey(sessionId: sessionId, interactionId: interactionId)
+            respondingInteractions.remove(key)
+            if let message, message.localizedCaseInsensitiveContains("not pending") {
+                sessionErrors.removeValue(forKey: sessionId)
+                submittedInteractions.remove(key)
+                resolvedInteractions.insert(key)
+            } else if let message {
+                sessionErrors[sessionId] = message
+                submittedInteractions.remove(key)
+            }
+            if clearInteractionSubmission { submittedInteractions.remove(key) }
+            if message == nil {
+                submittedInteractions.remove(key)
+                resolvedInteractions.insert(key)
+            }
+            persistInteractionStates()
         }
     }
 
@@ -306,15 +527,93 @@ final class MobileConnection: ObservableObject {
     }
 
     private func resubscribeSessions() {
-        guard let macDeviceId else { return }
         for (sessionId, projectId) in sessionProjects {
-            send(type: "session.subscribe", target: macDeviceId, projectId: projectId, sessionId: sessionId,
-                 payload: ["afterSequence": sessionEventSequences[sessionId] ?? -1])
+            subscribe(sessionId: sessionId, projectId: projectId)
+        }
+    }
+
+    private func respond(session: Session, interactionId: String, payload: [String: Any]) {
+        guard online, let macDeviceId else { sessionErrors[session.id] = "Mac is offline"; return }
+        let key = interactionKey(sessionId: session.id, interactionId: interactionId)
+        guard !respondingInteractions.contains(key), !resolvedInteractions.contains(key) else { return }
+        sessionErrors.removeValue(forKey: session.id)
+        respondingInteractions.insert(key)
+        submittedInteractions.insert(key)
+        persistInteractionStates()
+        send(type: "interaction.respond", target: macDeviceId, projectId: session.projectId, sessionId: session.id,
+             payload: payload, pending: .interaction(session.projectId, session.id, interactionId))
+    }
+
+    private func subscribe(sessionId: String, projectId: String) {
+        guard online, let macDeviceId else { sessionErrors[sessionId] = "Mac is offline"; return }
+        guard !subscribingSessions.contains(sessionId) else { return }
+        subscribingSessions.insert(sessionId)
+        sessionErrors.removeValue(forKey: sessionId)
+        let afterSequence = sessionEvents[sessionId]?.last?.sequence ?? -1
+        send(type: "session.subscribe", target: macDeviceId, projectId: projectId, sessionId: sessionId,
+             payload: ["afterSequence": afterSequence], pending: .sessionSubscribe(projectId, sessionId))
+    }
+
+    private func persistSessionCursors() {
+        UserDefaults.standard.set(sessionProjects, forKey: "sessionProjects")
+    }
+
+    private func persistInteractionStates() {
+        UserDefaults.standard.set(Array(submittedInteractions), forKey: "submittedInteractions")
+        UserDefaults.standard.set(Array(resolvedInteractions), forKey: "resolvedInteractions")
+    }
+
+    private func updateDerivedSessionState(_ event: AgentEvent, sessionId: String) {
+        switch event {
+        case let .status(value):
+            eventSessionStatuses[sessionId] = switch value.status { case .running: .running; case .idle: .idle; case .waitingUser: .waitingUser }
+            if value.status == .running || value.status == .idle { resolvePendingEventInteractions(sessionId: sessionId) }
+        case .turnCompleted:
+            eventSessionStatuses[sessionId] = .idle
+            resolvePendingEventInteractions(sessionId: sessionId)
+        case let .sessionCompleted(value):
+            eventSessionStatuses[sessionId] = switch value.outcome { case .completed: .completed; case .failed: .failed; case .cancelled: .cancelled }
+            resolvePendingEventInteractions(sessionId: sessionId)
+        case let .approvalRequested(value):
+            pendingEventInteractions[sessionId, default: []].insert(interactionKey(sessionId: sessionId, interactionId: value.interactionId))
+        case let .questionRequested(value):
+            pendingEventInteractions[sessionId, default: []].insert(interactionKey(sessionId: sessionId, interactionId: value.interactionId))
+        default: break
+        }
+    }
+
+    private func rebuildDerivedSessionState(sessionId: String, events: [AgentEvent]) {
+        eventSessionStatuses.removeValue(forKey: sessionId)
+        pendingEventInteractions[sessionId] = []
+        historicallyResolvedInteractions = Set(historicallyResolvedInteractions.filter { !$0.hasPrefix("\(sessionId):") })
+        for event in events { updateDerivedSessionState(event, sessionId: sessionId) }
+    }
+
+    private func resolvePendingEventInteractions(sessionId: String) {
+        historicallyResolvedInteractions.formUnion(pendingEventInteractions[sessionId] ?? [])
+        pendingEventInteractions[sessionId] = []
+    }
+
+    private func matchesResponse(_ pending: PendingRequest, type: String, source: String?, projectId: String?, sessionId: String?) -> Bool {
+        guard type == pending.responseType, source == macDeviceId else { return false }
+        switch pending {
+        case .directory, .text, .image, .imageList:
+            return projectId != nil
+        case let .sessionList(expectedProjectId), let .sessionCreate(expectedProjectId):
+            return projectId == expectedProjectId
+        case let .sessionSend(expectedProjectId, expectedSessionId, _), let .sessionCancel(expectedProjectId, expectedSessionId):
+            return projectId == expectedProjectId && sessionId == expectedSessionId
+        case let .sessionSubscribe(expectedProjectId, expectedSessionId):
+            return projectId == expectedProjectId && sessionId == expectedSessionId
+        case let .interaction(expectedProjectId, expectedSessionId, _):
+            return projectId == expectedProjectId && sessionId == expectedSessionId
         }
     }
 
     private func fileKey(projectId: String, path: String) -> String { "\(projectId):\(path)" }
+    private func interactionKey(sessionId: String, interactionId: String) -> String { "\(sessionId):\(interactionId)" }
 }
+
 
 private func decodeImage(_ base64: String) -> DecodedImage? {
     guard let data = Data(base64Encoded: base64),

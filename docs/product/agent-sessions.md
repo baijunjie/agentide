@@ -1,6 +1,6 @@
 # Agent 会话执行与事件投递
 
-Agent 会话由 Mac 上的 Agent Host 执行和持久化。iPhone 通过已配对设备之间的 Relay 消息创建会话、发送后续消息、取消当前轮次和回应审批或问题，并以带确认的事件流取得执行结果。Relay 只负责路由 Envelope，不运行 Agent，也不保存会话记录。
+Agent 会话由 Mac 上的 Agent Host 执行和持久化。iPhone 通过已配对设备之间的 Relay 消息列出和创建会话、发送后续消息、取消当前轮次并回应审批或问题，再以带确认的事件流取得执行结果。Relay 只负责路由 Envelope，不运行 Agent，也不保存会话记录。
 
 统一事件字段和 Adapter 接口见 [三端通信与 Agent 契约](protocol.md)；设备鉴权、在线状态与 Relay 的短时离线缓冲见 [设备配对与 Relay 连接](device-pairing.md)。
 
@@ -38,15 +38,32 @@ Agent Host 是会话元数据与规范化事件历史的本地权威来源：
 - Agent Host 重启后，在下一次会话操作时用 `nativeSessionId` 恢复原生会话。
 - 等待审批或问题时进程重启会使原生请求失效。Agent Host 在首次访问会话数据时记录可恢复错误和失败的 `turn.completed`，把会话恢复为 `idle`；旧交互回应会被明确拒绝，用户仍可开始新的轮次。
 
+## iPhone 会话与交互界面
+
+iPhone 的项目主路径是 Projects → Session List → Agent Session：
+
+- Session List 按更新时间倒序显示当前项目的会话标题、Agent 类型和统一状态。列表可下拉刷新；Mac 离线或项目没有启用任何 Agent 时不能新建会话。
+- 新建会话只能选择项目已启用的 Claude 或 Codex，并且必须填写非空 initial task。创建成功后新会话进入列表首位，界面直接进入该会话。
+- Agent Session 顶部显示由事件流更新的统一状态。只有 `idle` 状态可以发送非空文本；`running` 状态改为提供取消当前轮次的操作。会话列表和 Agent Session 都可以进入当前项目的文件浏览器。
+
+Agent Session 把两种 Agent 的统一事件呈现在同一个 Activity Feed 中：
+
+- 用户、Agent 和系统消息以文本块显示，Markdown 消息按 Markdown 渲染；工具、命令、文件变更、错误、状态、轮次完成和会话完成各自显示为活动块。
+- 相邻的 `text.delta` 会合并为同一个流式 Agent 文本块；随后到达的完整 Agent `message` 替换该流式内容。其他事件会结束当前文本流，避免不相邻的增量被错误拼接。
+- Feed 以 `sequence` 排序。同一序列号的重投事件不重复显示；较晚收到的旧事件会插入正确位置并重新计算状态与交互卡片是否仍可响应。
+- 审批卡片只显示事件声明的动作；问题卡片允许选择事件提供的选项，并仅在 `allowFreeText` 为真时接受自由文本。回应提交后卡片立即停用，同一 `sessionId + interactionId` 不会重复提交；收到成功响应、Agent 继续运行、轮次结束或服务端表示交互已不再等待时，卡片保持已回应状态。
+
+会话列表、创建、发送、取消、订阅和交互回应都必须收到与原请求 `replyTo`、响应类型、Mac 来源以及该请求适用的项目和会话相匹配的响应；不匹配的结果按失败处理。请求在 15 秒内没有响应时会结束等待并显示错误，Session List 与空 Activity Feed 提供显式重试入口。
+
 ## iPhone 事件投递
 
-远程会话操作使用 `session.create`、`session.sendMessage`、`session.cancel`、`interaction.respond` 和 `session.subscribe` 请求。Mac 校验会话确实属于请求中的项目，再转交本地 Agent Host。
+远程会话操作使用 `session.list`、`session.create`、`session.sendMessage`、`session.cancel`、`interaction.respond` 和 `session.subscribe` 请求。Mac 对涉及既有会话的操作校验会话确实属于请求中的项目，再转交本地 Agent Host。
 
 规范化事件以 `agent.event` 推送。可靠投递遵循以下规则：
 
 1. Mac 为每个“目标设备 + 会话”分别维护已确认游标，只发送游标之后的事件。
-2. iPhone 成功解码事件后保存最新序列号，并发送 `agent.event.ack`。在收到对应确认之前，Mac 会重复发送该事件，不会推进游标。
-3. iPhone 重新连上 Mac 后发送 `session.subscribe`，携带本机最后确认的 `afterSequence`；Mac 从 Agent Host 的持久化历史继续重放，因此 Relay 自身的短时缓冲不是会话恢复依据。
+2. iPhone 成功解码事件后记录本次运行中已收到的最新序列号，并发送 `agent.event.ack`。在收到对应确认之前，Mac 会重复发送该事件，不会推进游标；超出 Mac 已发送范围的确认不会推进游标。
+3. iPhone 重新连上 Mac 后自动为已打开且未终止的会话发送 `session.subscribe`，携带内存中最后收到的 `afterSequence`；应用重新启动后则从 `-1` 重放完整历史。Mac 从 Agent Host 的持久化历史继续投递，因此 Relay 自身的短时缓冲不是会话恢复依据。
 4. 一批事件以 `turn.completed` 或 `session.completed` 结束且已确认后，Mac 停止该批轮询。后续发送消息或重新订阅会启动新的投递批次。
 
 单个 Relay Envelope 不能超过 1 MiB。若某个规范化事件本身超过该上限，Mac 会在相同 `sequence` 上改发可恢复的 `agent_event_too_large` 错误，使确认游标能够继续前进，不会让后续事件被永久阻塞。

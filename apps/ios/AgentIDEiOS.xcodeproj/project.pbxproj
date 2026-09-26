@@ -12,6 +12,7 @@
 		B10000000000000000000017 /* MobileSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018 /* MobileSupport.swift */; };
 		B10000000000000000000019 /* FileViewers.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* FileViewers.swift */; };
 		B1000000000000000000001B /* SessionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001C /* SessionViews.swift */; };
+		B1000000000000000000001D /* WorkspaceNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001E /* WorkspaceNavigation.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +22,7 @@
 		B10000000000000000000018 /* MobileSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSupport.swift; sourceTree = "<group>"; };
 		B1000000000000000000001A /* FileViewers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewers.swift; sourceTree = "<group>"; };
 		B1000000000000000000001C /* SessionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViews.swift; sourceTree = "<group>"; };
+		B1000000000000000000001E /* WorkspaceNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceNavigation.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -29,7 +31,7 @@
 
 /* Begin PBXGroup section */
 		B10000000000000000000007 = {isa = PBXGroup; children = (B10000000000000000000008 /* AgentIDEiOS */, B10000000000000000000009 /* Products */,); sourceTree = "<group>"; };
-		B10000000000000000000008 /* AgentIDEiOS */ = {isa = PBXGroup; children = (B10000000000000000000002 /* App.swift */, B10000000000000000000016 /* MobileViews.swift */, B10000000000000000000018 /* MobileSupport.swift */, B1000000000000000000001A /* FileViewers.swift */, B1000000000000000000001C /* SessionViews.swift */,); path = AgentIDEiOS; sourceTree = "<group>"; };
+		B10000000000000000000008 /* AgentIDEiOS */ = {isa = PBXGroup; children = (B10000000000000000000002 /* App.swift */, B10000000000000000000016 /* MobileViews.swift */, B10000000000000000000018 /* MobileSupport.swift */, B1000000000000000000001A /* FileViewers.swift */, B1000000000000000000001C /* SessionViews.swift */, B1000000000000000000001E /* WorkspaceNavigation.swift */,); path = AgentIDEiOS; sourceTree = "<group>"; };
 		B10000000000000000000009 /* Products */ = {isa = PBXGroup; children = (B10000000000000000000005 /* AgentIDEiOS.app */,); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -46,7 +48,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		B1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001 /* App.swift in Sources */, B10000000000000000000015 /* MobileViews.swift in Sources */, B10000000000000000000017 /* MobileSupport.swift in Sources */, B10000000000000000000019 /* FileViewers.swift in Sources */, B1000000000000000000001B /* SessionViews.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		B1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001 /* App.swift in Sources */, B10000000000000000000015 /* MobileViews.swift in Sources */, B10000000000000000000017 /* MobileSupport.swift in Sources */, B10000000000000000000019 /* FileViewers.swift in Sources */, B1000000000000000000001B /* SessionViews.swift in Sources */, B1000000000000000000001D /* WorkspaceNavigation.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */

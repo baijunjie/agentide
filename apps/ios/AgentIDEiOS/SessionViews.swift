@@ -146,12 +146,65 @@ private struct AgentSessionView: View {
     let project: RemoteProject
     let session: Session
     @State private var input = ""
+    @State private var workspace = WorkspaceNavigationState()
 
     private var events: [AgentEvent] { connection.sessionEvents[session.id] ?? [] }
     private var status: SessionStatus { connection.status(for: session) }
     private var isSending: Bool { connection.activeSessionOperations.contains("send:\(session.id)") }
 
     var body: some View {
+        WorkspaceNavigationContainer(navigation: $workspace) {
+            sessionContent
+        } browserContent: {
+            FileBrowserContent(
+                project: project,
+                openText: { selection in
+                    workspace.prepareFile(selection)
+                    // Mount the file layer offscreen for one render pass so its spatial properties animate instead of appearing at their final values.
+                    Task { @MainActor in
+                        await Task.yield()
+                        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
+                            workspace.activatePreparedFile()
+                        }
+                    }
+                },
+                openImage: { workspace.showImage($0) }
+            )
+        } fileContent: { selection in
+            TextFileViewer(selection: selection)
+        }
+        .navigationTitle(workspaceTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
+                        workspace.showBrowser()
+                    }
+                } label: { Image(systemName: "folder") }
+                .disabled(workspace.level != .session)
+            }
+            if workspace.level == .session {
+                ToolbarItem(placement: .principal) { StatusBadge(status: status) }
+            }
+        }
+        .fullScreenCover(item: $workspace.fullScreenImage) { ImageViewer(selection: $0) }
+        .task { connection.openSession(session) }
+        .onChange(of: connection.acceptedMessage?.id) {
+            guard let accepted = connection.acceptedMessage, accepted.sessionId == session.id else { return }
+            if input.trimmingCharacters(in: .whitespacesAndNewlines) == accepted.content { input = "" }
+        }
+    }
+
+    private var workspaceTitle: String {
+        switch workspace.level {
+        case .session: session.title
+        case .browser: project.name
+        case let .file(selection): selection.name
+        }
+    }
+
+    private var sessionContent: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -200,19 +253,6 @@ private struct AgentSessionView: View {
                 }
             }
             .padding()
-        }
-        .navigationTitle(session.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink { FileBrowserView(project: project) } label: { Image(systemName: "folder") }
-            }
-            ToolbarItem(placement: .principal) { StatusBadge(status: status) }
-        }
-        .task { connection.openSession(session) }
-        .onChange(of: connection.acceptedMessage?.id) {
-            guard let accepted = connection.acceptedMessage, accepted.sessionId == session.id else { return }
-            if input.trimmingCharacters(in: .whitespacesAndNewlines) == accepted.content { input = "" }
         }
     }
 }

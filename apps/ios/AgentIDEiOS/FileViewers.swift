@@ -16,7 +16,7 @@ struct TextFileSelection: Hashable {
     }
 }
 
-struct ImageFileSelection: Identifiable {
+struct ImageFileSelection: Identifiable, Equatable {
     let projectId: String
     let name: String
     let relativePath: String

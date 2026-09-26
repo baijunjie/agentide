@@ -52,11 +52,35 @@ struct MobileHomeView: View {
 }
 
 struct FileBrowserView: View {
+    let project: RemoteProject
+    @State private var selectedText: TextFileSelection?
+    @State private var selectedImage: ImageFileSelection?
+
+    var body: some View {
+        FileBrowserContent(
+            project: project,
+            openText: { selectedText = $0 },
+            openImage: { selectedImage = $0 }
+        )
+        .navigationTitle(project.name)
+        .navigationDestination(isPresented: Binding(
+            get: { selectedText != nil },
+            set: { if !$0 { selectedText = nil } }
+        )) {
+            if let selectedText { TextFileViewer(selection: selectedText) }
+        }
+        .fullScreenCover(item: $selectedImage) { ImageViewer(selection: $0) }
+    }
+}
+
+struct FileBrowserContent: View {
     @EnvironmentObject private var connection: MobileConnection
     let project: RemoteProject
+    let openText: (TextFileSelection) -> Void
+    let openImage: (ImageFileSelection) -> Void
     @State private var expandedPaths: Set<String> = []
     @State private var scrollPosition: String?
-    @State private var selectedImage: ImageFileSelection?
+
     var body: some View {
         List {
             if connection.entries(projectId: project.id, path: "") == nil {
@@ -66,14 +90,18 @@ struct FileBrowserView: View {
                 }
             }
             ForEach(connection.entries(projectId: project.id, path: "") ?? [], id: \.relativePath) { entry in
-                FileTreeRow(project: project, entry: entry, depth: 0, expandedPaths: $expandedPaths) { selectedImage = $0 }
+                FileTreeRow(
+                    project: project,
+                    entry: entry,
+                    depth: 0,
+                    expandedPaths: $expandedPaths,
+                    openText: openText,
+                    openImage: openImage
+                )
             }
         }
         .animation(.easeInOut(duration: 0.2), value: connection.files.count)
         .scrollPosition(id: $scrollPosition)
-        .navigationTitle(project.name)
-        .navigationDestination(for: TextFileSelection.self) { TextFileViewer(selection: $0) }
-        .fullScreenCover(item: $selectedImage) { ImageViewer(selection: $0) }
         .task { if connection.entries(projectId: project.id, path: "") == nil { connection.requestFiles(projectId: project.id, relativePath: "") } }
     }
     private func directoryError(_ message: String, path: String) -> some View {
@@ -94,6 +122,7 @@ private struct FileTreeRow: View {
     let entry: FileEntry
     let depth: Int
     @Binding var expandedPaths: Set<String>
+    let openText: (TextFileSelection) -> Void
     let openImage: (ImageFileSelection) -> Void
     private var expanded: Bool { expandedPaths.contains(entry.relativePath) }
     var body: some View {
@@ -113,7 +142,14 @@ private struct FileTreeRow: View {
                     .padding(.leading, CGFloat(depth + 1) * 18)
                 }
                 ForEach(connection.entries(projectId: project.id, path: entry.relativePath) ?? [], id: \.relativePath) { child in
-                    FileTreeRow(project: project, entry: child, depth: depth + 1, expandedPaths: $expandedPaths, openImage: openImage)
+                    FileTreeRow(
+                        project: project,
+                        entry: child,
+                        depth: depth + 1,
+                        expandedPaths: $expandedPaths,
+                        openText: openText,
+                        openImage: openImage
+                    )
                 }
             }
         }
@@ -133,7 +169,7 @@ private struct FileTreeRow: View {
         } else if entry.isImage == true {
             Button { openImage(.init(project: project, entry: entry)) } label: { rowLabel }.buttonStyle(.plain)
         } else if entry.isText == true {
-            NavigationLink(value: TextFileSelection(project: project, entry: entry)) { rowLabel }.buttonStyle(.plain)
+            Button { openText(.init(project: project, entry: entry)) } label: { rowLabel }.buttonStyle(.plain)
         } else {
             rowLabel
         }

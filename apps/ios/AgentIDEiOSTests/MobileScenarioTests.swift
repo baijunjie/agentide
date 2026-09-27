@@ -3,11 +3,20 @@ import AgentIDEProtocol
 @testable import AgentIDEiOS
 
 final class MobileScenarioTests: XCTestCase {
+    func testReportDetailTruncationIsBoundedAtFiftyItems() {
+        XCTAssertNil(ReportPresentation.truncationText(total: 50))
+        XCTAssertEqual(
+            ReportPresentation.truncationText(total: 55),
+            "Showing the first 50 of 55 items"
+        )
+    }
+
     func testLaunchArgumentSelectsScenario() {
         XCTAssertEqual(MobileScenario.fromLaunchArguments(["app", "-mobileScenario", "offline"]), .offline)
         XCTAssertEqual(MobileScenario.fromLaunchArguments(["app", "--mobile-scenario=request-failure"]), .requestFailure)
         XCTAssertEqual(MobileScenario.fromLaunchArguments(["app", "--mobile-scenario=timeout"]), .timeout)
         XCTAssertEqual(MobileScenario.fromLaunchArguments(["app", "--mobile-scenario=invalid-response"]), .invalidResponse)
+        XCTAssertEqual(MobileScenario.fromLaunchArguments(["app", "--mobile-scenario=report-layout"]), .reportLayout)
         XCTAssertNil(MobileScenario.fromLaunchArguments(["app"]))
     }
 
@@ -27,7 +36,11 @@ final class MobileScenarioTests: XCTestCase {
 
         let snapshot = try response(runtime, type: "session.getSnapshot", id: "request-snapshot", projectId: "project-demo", sessionId: "session-demo")
         let decodedSnapshot = try decodePayload(snapshot, as: SessionSnapshot.self)
-        XCTAssertEqual(decodedSnapshot.recentEvents.count, 6)
+        XCTAssertEqual(decodedSnapshot.recentEvents.count, 11)
+        XCTAssertEqual(decodedSnapshot.recentEvents.filter {
+            if case .report = $0 { return true }
+            return false
+        }.count, 5)
         XCTAssertEqual(decodedSnapshot.pendingInteractions.count, 2)
 
         let files = try response(runtime, type: "project.listFiles", id: "request-files", projectId: "project-demo", payload: ["relativePath": ""])
@@ -51,8 +64,23 @@ final class MobileScenarioTests: XCTestCase {
             _ = try JSONDecoder().decode(Envelope<JSONValue>.self, from: data)
             return try decodePayload(object(data), as: AgentEvent.self)
         }
-        XCTAssertEqual(events.last?.sequence, 10)
+        XCTAssertEqual(events.last?.sequence, 15)
         XCTAssertTrue(runtime.drain().isEmpty)
+    }
+
+    func testFocusedScenariosKeepContiguousEventSequences() throws {
+        for scenario in [MobileScenario.interactions, .reports] {
+            let runtime = MobileScenarioRuntime(scenario: scenario)
+            let snapshot = try response(
+                runtime,
+                type: "session.getSnapshot",
+                id: "request-\(scenario.rawValue)",
+                projectId: "project-demo",
+                sessionId: "session-demo"
+            )
+            let events = try decodePayload(snapshot, as: SessionSnapshot.self).recentEvents
+            XCTAssertEqual(events.map(\.sequence), Array(events.indices))
+        }
     }
 
     func testOfflineAndFailureScenariosReturnCorrelatedErrors() throws {
@@ -90,7 +118,7 @@ final class MobileScenarioTests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         XCTAssertTrue(timestamps.allSatisfy { formatter.date(from: $0) != nil })
-        XCTAssertEqual(timestamps.last, "2026-09-27T00:01:05.000Z")
+        XCTAssertEqual(timestamps.last, "2026-09-27T00:01:10.000Z")
     }
 
     func testChangesScenariosExposeMixedEmptyAndBinaryStates() throws {

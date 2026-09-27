@@ -112,7 +112,7 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   }
 
   const agentEvents = await readJson(fixtureUrl("agent-events"));
-  assert.equal(agentEvents.length, 13);
+  assert.equal(agentEvents.length, 19);
   for (const event of agentEvents) {
     assert.equal(validateAgentEvent(event), true, JSON.stringify(validateAgentEvent.errors));
   }
@@ -126,6 +126,59 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   }
   for (const event of await readJson(fixtureUrl("agent-events-invalid-null"))) {
     assert.equal(validateAgentEvent(event), false, JSON.stringify(event));
+  }
+  for (const event of await readJson(fixtureUrl("agent-report-events-invalid"))) {
+    assert.equal(validateAgentEvent(event), false, JSON.stringify(event));
+  }
+  const runtimeInvalidReports = await readJson(fixtureUrl("agent-report-events-runtime-invalid"));
+  assert.equal(runtimeInvalidReports.length, 4);
+  assert.equal(validateAgentEvent(runtimeInvalidReports[0]), true);
+  for (const event of runtimeInvalidReports.slice(1)) {
+    assert.equal(validateAgentEvent(event), false, JSON.stringify(event));
+  }
+  const maximumSafeInteger = Number.MAX_SAFE_INTEGER;
+  for (const event of [
+    {
+      id: "max-count",
+      sessionId: "s1",
+      sequence: 1,
+      timestamp: "2026-09-22T00:00:00.000Z",
+      type: "report",
+      reportVersion: 1,
+      reportId: "r-max-count",
+      kind: "test_report",
+      title: "Tests",
+      summary: "Maximum count",
+      payload: { total: maximumSafeInteger, passed: maximumSafeInteger, failed: 0, skipped: 0, failures: [] },
+    },
+    {
+      id: "max-version",
+      sessionId: "s1",
+      sequence: 2,
+      timestamp: "2026-09-22T00:00:00.000Z",
+      type: "report",
+      reportVersion: maximumSafeInteger,
+      reportId: "r-max-version",
+      kind: "future",
+      title: "Future",
+      summary: "Maximum version",
+      payload: {},
+    },
+    {
+      id: "max-location",
+      sessionId: "s1",
+      sequence: 3,
+      timestamp: "2026-09-22T00:00:00.000Z",
+      type: "report",
+      reportVersion: 1,
+      reportId: "r-max-location",
+      kind: "diagnostics",
+      title: "Diagnostics",
+      summary: "Maximum location",
+      payload: { items: [{ severity: "error", message: "Bad", line: maximumSafeInteger, column: maximumSafeInteger }] },
+    },
+  ]) {
+    assert.equal(validateAgentEvent(event), true, JSON.stringify(validateAgentEvent.errors));
   }
   for (const event of await readJson(fixtureUrl("agent-events-null-unknown"))) {
     assert.equal(validateAgentEvent(event), true, JSON.stringify(validateAgentEvent.errors));

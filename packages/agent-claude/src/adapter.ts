@@ -10,12 +10,15 @@ import type {
 } from "@agentide/agent-core";
 import {
   getSessionMessages,
+  createSdkMcpServer,
   query,
+  tool,
   type CanUseTool,
   type PermissionResult,
   type PermissionUpdate,
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { parseReportInput, reportInputSchema, type ReportEventInput } from "@agentide/agent-core";
 
 interface SessionState {
   session: AgentSession;
@@ -66,6 +69,7 @@ export interface ClaudeQueryRequest {
   resume: boolean;
   abortController: AbortController;
   canUseTool: CanUseTool;
+  report: (input: unknown) => boolean;
 }
 
 export type ClaudeQueryFactory = (request: ClaudeQueryRequest) => AsyncIterable<SDKMessage>;
@@ -181,6 +185,7 @@ export class ClaudeAdapter implements AgentAdapter {
         abortController: turn.abortController,
         canUseTool: (toolName, toolInput, permissionOptions) =>
           this.requestPermission(state, toolName, toolInput, permissionOptions),
+        report: (report) => this.report(state, report),
       });
       const iterator = stream[Symbol.asyncIterator]();
       turn.iterator = iterator;
@@ -340,6 +345,7 @@ export class ClaudeAdapter implements AgentAdapter {
       if (block.type === "text" && typeof block.text === "string") {
         this.emit(state, { type: "message", role: "agent", content: block.text, format: "markdown" });
       } else if (block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
+        if (isAgentideReportTool(block.name)) continue;
         const input = asOptionalRecord(block.input) ?? {};
         const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
         state.tools.set(block.id, { name: block.name, ...(command === undefined ? {} : { command }) });
@@ -377,6 +383,7 @@ export class ClaudeAdapter implements AgentAdapter {
     options: Parameters<CanUseTool>[2],
   ): Promise<PermissionResult> {
     throwIfAborted(options.signal);
+    if (isAgentideReportTool(toolName)) return { behavior: "allow", updatedInput: input };
     if (toolName === "AskUserQuestion") return this.requestQuestions(state, input, options.toolUseID, options.signal);
 
     const interactionId = options.toolUseID;
@@ -505,6 +512,13 @@ export class ClaudeAdapter implements AgentAdapter {
       timestamp: this.now().toISOString(),
     } as AgentEvent);
   }
+
+  private report(state: SessionState, input: unknown): boolean {
+    const event = reportEvent(input);
+    if (event === undefined) return false;
+    this.emit(state, event);
+    return true;
+  }
 }
 
 type EventInput = AgentEvent extends infer Event
@@ -514,6 +528,7 @@ type EventInput = AgentEvent extends infer Event
   : never;
 
 function defaultQuery(request: ClaudeQueryRequest): AsyncIterable<SDKMessage> {
+  const reportServer = createReportServer(request.report);
   return query({
     prompt: request.prompt,
     options: {
@@ -521,12 +536,43 @@ function defaultQuery(request: ClaudeQueryRequest): AsyncIterable<SDKMessage> {
       canUseTool: request.canUseTool,
       cwd: request.workingDirectory,
       includePartialMessages: true,
+      mcpServers: { agentide: reportServer },
       permissionMode: "default",
       ...(request.resume
         ? { resume: request.nativeSessionId }
         : { sessionId: request.nativeSessionId }),
     },
   });
+}
+
+export function createReportServer(report: (input: unknown) => boolean) {
+  return createSdkMcpServer({
+    name: "agentide",
+    version: "1.0.0",
+    alwaysLoad: true,
+    tools: [tool(
+      "report",
+      "Publish a structured AgentIDE report. Use only for test results, plans, todos, or diagnostics; leave ordinary progress and prose as normal messages.",
+      reportInputSchema as unknown as Record<string, never>,
+      async (input: unknown) => report(input)
+        ? { content: [{ type: "text", text: "Report published." }] }
+        : { content: [{ type: "text", text: "Report input is invalid." }], isError: true },
+      { alwaysLoad: true },
+    )],
+  });
+}
+
+function reportEvent(input: unknown): ReportEventInput | undefined {
+  const report = parseReportInput(input);
+  if (report === undefined) return undefined;
+  return {
+    type: "report",
+    ...report,
+  };
+}
+
+function isAgentideReportTool(name: string): boolean {
+  return name === "agentide.report" || name === "mcp__agentide__report";
 }
 
 async function defaultSessionExists(nativeSessionId: string, workingDirectory: string): Promise<boolean> {

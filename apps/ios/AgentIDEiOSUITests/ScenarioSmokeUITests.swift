@@ -1,9 +1,10 @@
 import XCTest
 
+@MainActor
 final class ScenarioSmokeUITests: XCTestCase {
     func testComprehensiveScenarioOpensSessionAndRendersInteraction() {
         let app = XCUIApplication()
-        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launchArguments = ["-mobileScenario", "interactions"]
         app.launch()
 
         let project = app.staticTexts["Scenario Workspace"]
@@ -14,29 +15,40 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(session.waitForExistence(timeout: 5))
         session.tap()
 
-        XCTAssertTrue(app.staticTexts["Run tests"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["question-option-tests"].waitForExistence(timeout: 5))
         let approve = app.buttons["Approve Once"]
-        XCTAssertTrue(approve.exists)
-        XCTAssertTrue(app.buttons["Reject"].exists)
+        XCTAssertTrue(makeHittable(approve, in: app, moving: .later))
+        XCTAssertTrue(app.buttons["Reject"].waitForExistence(timeout: 5))
         approve.tap()
         XCTAssertTrue(app.staticTexts["Responded"].waitForExistence(timeout: 5))
 
-        let option = app.buttons["question-option-tests"]
-        XCTAssertTrue(option.waitForExistence(timeout: 5))
-        option.tap()
+        let answer = app.textFields["Your answer"]
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        answer.tap()
+        answer.typeText("Run tests")
         let submit = app.buttons["question-submit-question-demo"]
+        XCTAssertTrue(submit.waitForExistence(timeout: 5))
         let submitEnabled = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "enabled == true"),
             object: submit
         )
         XCTAssertEqual(XCTWaiter.wait(for: [submitEnabled], timeout: 5), .completed)
         submit.tap()
-        XCTAssertTrue(app.staticTexts["Completed"].waitForExistence(timeout: 5))
+        let submitDisabled = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == false"),
+            object: submit
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [submitDisabled], timeout: 5), .completed)
+        let keyboardHidden = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: app.keyboards.firstMatch
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardHidden], timeout: 5), .completed)
     }
 
     func testComprehensiveScenarioCreatesSessionAndBrowsesFiles() {
         let app = XCUIApplication()
-        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launchArguments = ["-mobileScenario", "interactions"]
         app.launch()
 
         let project = app.staticTexts["Scenario Workspace"]
@@ -90,7 +102,7 @@ final class ScenarioSmokeUITests: XCTestCase {
 
     func testComprehensiveScenarioOpensChangesDiffAndReturnsToSession() {
         let app = XCUIApplication()
-        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launchArguments = ["-mobileScenario", "interactions"]
         app.launch()
 
         let project = app.staticTexts["Scenario Workspace"]
@@ -112,12 +124,12 @@ final class ScenarioSmokeUITests: XCTestCase {
         back.tap()
         XCTAssertTrue(back.waitForExistence(timeout: 5))
         back.tap()
-        XCTAssertTrue(app.staticTexts["Run tests"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["session-changes"].waitForExistence(timeout: 5))
     }
 
     func testComprehensiveScenarioFileChangedOpensMatchingDiff() {
         let app = XCUIApplication()
-        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launchArguments = ["-mobileScenario", "interactions"]
         app.launch()
 
         let project = app.staticTexts["Scenario Workspace"]
@@ -128,9 +140,96 @@ final class ScenarioSmokeUITests: XCTestCase {
         session.tap()
 
         let fileChanged = app.buttons["file-changed-Sources/App.swift"]
-        XCTAssertTrue(fileChanged.waitForExistence(timeout: 5))
+        XCTAssertTrue(makeHittable(fileChanged, in: app, moving: .earlier))
         fileChanged.tap()
         XCTAssertTrue(app.staticTexts["diff-hunk"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Sources/App.swift"].exists)
+    }
+
+    func testComprehensiveScenarioRendersReportsAndOpensDiagnosticFile() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "reports"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+
+        let testReport = app.buttons["report-test_report"]
+        XCTAssertTrue(testReport.waitForExistence(timeout: 5))
+        assertMetric("report-test-total", contains: ["42", "Total"], in: app)
+        assertMetric("report-test-passed", contains: ["40", "Passed"], in: app)
+        assertMetric("report-test-failed", contains: ["1", "Failed"], in: app)
+        assertMetric("report-test-skipped", contains: ["1", "Skipped"], in: app)
+        guard makeHittable(testReport, in: app, moving: .earlier) else {
+            XCTFail("Report frame: \(testReport.frame), navigation: \(app.navigationBars.firstMatch.frame), composer: \(app.textFields["session-composer"].frame), feed: \(app.scrollViews["session-feed"].frame)")
+            return
+        }
+        testReport.tap()
+        XCTAssertTrue(app.staticTexts["WorkspaceTests.testRestore"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Expected restored report state"].waitForExistence(timeout: 5))
+        XCTAssertTrue(makeHittable(testReport, in: app, moving: .earlier))
+        testReport.tap()
+
+        let plan = app.buttons["report-plan"]
+        XCTAssertTrue(makeHittable(plan, in: app, moving: .later))
+        plan.tap()
+        XCTAssertTrue(app.staticTexts["1. Define protocol"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Completed"].waitForExistence(timeout: 5))
+        XCTAssertTrue(makeHittable(plan, in: app, moving: .earlier))
+        plan.tap()
+
+        let todo = app.buttons["report-todo"]
+        XCTAssertTrue(makeHittable(todo, in: app, moving: .later))
+        todo.tap()
+        XCTAssertTrue(app.staticTexts["Task 1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Blocked"].waitForExistence(timeout: 5))
+        XCTAssertTrue(makeHittable(todo, in: app, moving: .earlier))
+        todo.tap()
+
+        let diagnostics = app.buttons["report-diagnostics"]
+        XCTAssertTrue(makeHittable(diagnostics, in: app, moving: .later))
+        diagnostics.tap()
+        let diagnostic = app.buttons["diagnostic-file-Sources/App.swift"]
+        XCTAssertTrue(makeHittable(diagnostic, in: app, moving: .later))
+        XCTAssertTrue(app.staticTexts["Preview state is stale"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Sources/App.swift:12:5"].waitForExistence(timeout: 5))
+        diagnostic.tap()
+        XCTAssertTrue(app.buttons["file-actions"].waitForExistence(timeout: 5))
+
+        app.swipeLeft()
+        XCTAssertTrue(app.buttons["session-changes"].waitForExistence(timeout: 5))
+        XCTAssertTrue(makeHittable(diagnostics, in: app, moving: .earlier))
+        diagnostics.tap()
+
+        let future = app.buttons["report-coverage"]
+        XCTAssertTrue(makeHittable(future, in: app, moving: .later))
+        future.tap()
+        let fallback = app.staticTexts["report-unknown-fallback"]
+        XCTAssertTrue(fallback.waitForExistence(timeout: 5))
+        XCTAssertEqual(fallback.label, "This report type is not supported by this version of AgentIDE.")
+    }
+
+    func testReportHeaderRemainsAccessibleInLandscape() {
+        let device = XCUIDevice.shared
+        device.orientation = .landscapeLeft
+        defer { device.orientation = .portrait }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "report-layout"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+
+        let report = app.buttons["report-test_report"]
+        XCTAssertTrue(report.waitForExistence(timeout: 5))
+        XCTAssertGreaterThanOrEqual(report.frame.minY, app.navigationBars.firstMatch.frame.maxY)
+        report.tap()
+        XCTAssertTrue(app.staticTexts["WorkspaceTests.testRestore"].waitForExistence(timeout: 5))
     }
 
     func testComprehensiveScenarioSearchesFileAndSendsReferenceToSession() {
@@ -200,5 +299,60 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["session-browse-files"].waitForExistence(timeout: 5))
         app.buttons["session-browse-files"].tap()
         return app
+    }
+
+    private enum FeedDirection {
+        case earlier
+        case later
+    }
+
+    private func makeHittable(
+        _ element: XCUIElement,
+        in app: XCUIApplication,
+        moving direction: FeedDirection = .earlier,
+        attempts: Int = 12
+    ) -> Bool {
+        _ = element.waitForExistence(timeout: 1)
+        if isVisibleInFeed(element, app: app) { return true }
+        let feed = app.scrollViews["session-feed"]
+        guard feed.waitForExistence(timeout: 2) else { return false }
+        for _ in 0..<attempts {
+            drag(feed, moving: directionToReveal(element, in: app) ?? direction)
+            if isVisibleInFeed(element, app: app) { return true }
+        }
+        return false
+    }
+
+    private func directionToReveal(_ element: XCUIElement, in app: XCUIApplication) -> FeedDirection? {
+        guard element.exists else { return nil }
+        let top = app.navigationBars.firstMatch.frame.maxY
+        let bottom = app.textFields["session-composer"].frame.minY
+        if element.frame.maxY < top { return .earlier }
+        if element.frame.minY > bottom { return .later }
+        return nil
+    }
+
+    private func isVisibleInFeed(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        let top = app.navigationBars.firstMatch.frame.maxY
+        let bottom = app.textFields["session-composer"].frame.minY
+        return element.frame.midY >= top && element.frame.midY <= bottom
+    }
+
+    private func assertMetric(_ identifier: String, contains values: [String], in app: XCUIApplication) {
+        let metric = app.descendants(matching: .any)[identifier]
+        XCTAssertTrue(metric.waitForExistence(timeout: 2), "Missing metric \(identifier)")
+        for value in values {
+            XCTAssertTrue(metric.label.contains(value), "Expected \(identifier) label '\(metric.label)' to contain '\(value)'")
+        }
+    }
+
+    private func drag(_ feed: XCUIElement, moving direction: FeedDirection) {
+        let startY = direction == .earlier ? 0.45 : 0.85
+        let endY = direction == .earlier ? 0.85 : 0.45
+        feed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY)).press(
+            forDuration: 0.05,
+            thenDragTo: feed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        )
     }
 }

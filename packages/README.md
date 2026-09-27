@@ -13,7 +13,7 @@
 - payload：`WirePayload`、`EncryptedPayload`。
 - 校验器：`isMessageType()`、`isEncryptedPayload()`、`isEnvelope()`、`isProtocolTimestamp()`。
 
-`schema/` 提供 Envelope、响应、Agent 事件和共享业务对象的 Draft 2020-12 Schema，其中 `project-search.schema.json` 约束项目文件搜索与取消请求，`git-changes.schema.json` 约束 Changes/Diff 请求响应及字段组合。Envelope、Agent 事件、项目文件搜索和 Git Changes/Diff 的正反例 `fixtures/` 同时被 TypeScript 与 Swift 测试消费，用于固定跨语言的接受与拒绝行为；其余共享业务对象目前只用正例 fixture 验证 Schema 与 Swift DTO 的共同解码。
+`schema/` 提供 Envelope、响应、Agent 事件和共享业务对象的 Draft 2020-12 Schema，其中 Agent 事件 Schema 包含版本化结构报告，`project-search.schema.json` 约束项目文件搜索与取消请求，`git-changes.schema.json` 约束 Changes/Diff 请求响应及字段组合。Envelope、Agent 事件、结构化报告、项目文件搜索和 Git Changes/Diff 的正反例 `fixtures/` 同时被 TypeScript 与 Swift 测试消费，用于固定跨语言的接受与拒绝行为；其余共享业务对象目前只用正例 fixture 验证 Schema 与 Swift DTO 的共同解码。
 
 ### `AgentIDEProtocol`
 
@@ -23,7 +23,7 @@
 
 - 协议封装：`ProtocolVersion`、`MessageType`、`Envelope`、`ResponseEnvelope`、`ProtocolError`、`WirePayload`、`EncryptedPayload`、`JSONValue`、`EmptyPayload`。
 - 共享对象：`AgentType`、`SessionStatus`、`Project`、`Session`、`FileEntry`、`ProjectSearchFilesRequest`、`ProjectCancelSearchRequest`、`ProjectSearchFilesResponse`、`GitChangeKind`、`GitChangeArea`、`GitChange`、`ProjectChangesResponse`、`ProjectDiffRequest`、`ProjectDiffResponse`。
-- Agent 事件：`AgentEvent`、13 个具体事件 DTO、`ApprovalAction` 与 `QuestionOption`。
+- Agent 事件：`AgentEvent`、14 个具体事件 DTO、`ApprovalAction` 与 `QuestionOption`；报告 DTO 包括 `ReportEvent`、`ReportPayload`、`TestReportPayload`、`PlanReportPayload`、`TodoReportPayload` 和 `DiagnosticsReportPayload` 及其条目类型。
 
 Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“显式 null”；未解释的 JSON payload 通过 `JSONValue` 往返，不能用普通 Swift 可选值吞掉显式 null。
 
@@ -51,14 +51,14 @@ Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“�
 
 - `AgentAdapter`：创建/恢复会话、发送消息、取消、回应交互和订阅异步事件。
 - `AgentCapabilities`、`CreateSessionOptions`、`AgentSession`、`AgentInput`、`InteractionResponse`：Adapter 的输入输出模型。
-- `AgentEvent`、`BaseEvent` 与各具体事件接口：统一事件联合类型。
+- `AgentEvent`、`BaseEvent` 与各具体事件接口：统一事件联合类型；结构化报告由 `ReportEvent`、`ReportPayload` 和四种首版 payload 接口描述。
 - `ApprovalAction`、`QuestionOption`：用户交互的共享类型。
-- `isAgentEvent()`：统一事件的运行时类型守卫。
+- `isAgentEvent()`、`isReportEvent()`：统一事件与结构化报告的运行时类型守卫。
 
 ## 集成边界
 
 | 包 | 当前对外接口 | 职责边界 |
 | --- | --- | --- |
-| `@agentide/agent-codex` | `CODEX_ADAPTER_KIND`、`CodexAdapter`、`CodexAdapterOptions`、`SpawnedCodexAppServer`、`CodexAppServerConnection`、`CodexNotification`、`CodexServerRequest` | 管理 `codex app-server` JSONL RPC，并把 Codex thread、turn、工具、文件变更和审批适配为统一 Agent 契约。 |
-| `@agentide/agent-claude` | `CLAUDE_ADAPTER_KIND`、`ClaudeAdapter`、`ClaudeAdapterOptions`、`ClaudeQueryFactory`、`ClaudeQueryRequest` | 通过 Claude Agent SDK 管理 Claude Code 会话，并把流式输出、工具、命令、审批、提问和轮次结果适配为统一 Agent 契约。 |
+| `@agentide/agent-codex` | `CODEX_ADAPTER_KIND`、`CodexAdapter`、`CodexAdapterOptions`、`SpawnedCodexAppServer`、`CodexAppServerConnection`、`CodexNotification`、`CodexServerRequest` | 管理 `codex app-server` JSONL RPC，并把 Codex thread、turn、工具、文件变更、审批和第一方结构化报告适配为统一 Agent 契约。 |
+| `@agentide/agent-claude` | `CLAUDE_ADAPTER_KIND`、`ClaudeAdapter`、`ClaudeAdapterOptions`、`ClaudeQueryFactory`、`ClaudeQueryRequest` | 通过 Claude Agent SDK 管理 Claude Code 会话，并把流式输出、工具、命令、审批、提问、结构化报告和轮次结果适配为统一 Agent 契约。 |
 | `@agentide/crypto` | `CRYPTO_BOUNDARY_VERSION` | payload 加密能力的独立实现位置。 |

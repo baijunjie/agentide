@@ -17,10 +17,9 @@
 
 | 顺序 | 计划 | 主要价值 | 自动化边界 | 状态 |
 | --- | --- | --- | --- | --- |
-| 04 | [Rich Report Blocks](04-RichReportBlocks.md) | 结构化展示测试、计划和诊断结果 | 协议 fixtures 与 Simulator 可完整覆盖渲染 | 待开发 |
 | 05 | [Push Notification](05-PushNotification.md) | Agent 等待用户或完成时及时提醒 | 业务逻辑可自动化，APNs 投递必须真机验证 | 待开发 |
 
-剩余迭代按顺序实施。04 扩展 Activity Feed 的结构化展示；05 涉及 APNs、系统权限和后台行为，最后集中处理。
+剩余迭代为 05 Push Notification，涉及 APNs、系统权限和后台行为。
 
 ## 统一自动化门槛
 
@@ -37,12 +36,11 @@
 
 | 计划 | 纯状态 | 协议 fixtures | Host/Server 集成 | Scenario 请求/事件 | UI 闭环 |
 | --- | --- | --- | --- | --- | --- |
-| 04 Rich Reports | 必需 | 必需 | Adapter/Host 必需 | 事件 fixture 必需 | 必需 |
 | 05 Push | 必需 | 必需 | Relay/Mac/Host 必需 | 通知与深链注入必需 | 必需 |
 
 ## 集中人工验证范围
 
-除 Push Notification 外，前四个迭代不要求逐功能真机确认。版本候选阶段统一检查：
+版本候选阶段统一检查以下跨功能体验：
 
 - 不同屏幕尺寸、横竖屏和 Dynamic Type 下的布局。
 - Session、Files、Viewer、Changes 和 Search 之间的手势体感。
@@ -54,4 +52,4 @@ Push Notification 另需验证 APNs 环境、授权弹窗、前后台展示、�
 
 ## 阶段完成条件
 
-剩余两个计划分别达到完成判据，且没有扩大到代码编辑、Git 写操作、LSP、调试器、更多客户端平台或云端源码索引时，本阶段完成。MVP 尚未完成的真实连接与安全验收仍由原 MVP 验收计划负责，不与本阶段功能验收互相替代。
+05 Push Notification 达到完成判据，且没有扩大到代码编辑、Git 写操作、LSP、调试器、更多客户端平台或云端源码索引时，本阶段完成。MVP 尚未完成的真实连接与安全验收仍由原 MVP 验收计划负责，不与本阶段功能验收互相替代。

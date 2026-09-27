@@ -87,11 +87,23 @@ private func fixture(named name: String) throws -> Data {
 @Test func sharedAgentEventFixturesCoverEveryDiscriminator() throws {
     let decoder = JSONDecoder()
     let events = try decoder.decode([AgentEvent].self, from: fixture(named: "agent-events"))
-    #expect(events.count == 13)
+    #expect(events.count == 19)
 
     for name in ["agent-event-invalid-sequence", "agent-event-invalid-approval"] {
         #expect(throws: (any Error).self) {
             _ = try decoder.decode(AgentEvent.self, from: fixture(named: name))
+        }
+    }
+    for name in ["agent-report-events-invalid", "agent-report-events-runtime-invalid"] {
+        let invalidReports = try JSONDecoder().decode(
+            [[String: JSONValue]].self,
+            from: fixture(named: name)
+        )
+        for invalidReport in invalidReports {
+            let data = try JSONEncoder().encode(invalidReport)
+            #expect(throws: (any Error).self) {
+                _ = try decoder.decode(AgentEvent.self, from: data)
+            }
         }
     }
 
@@ -108,6 +120,31 @@ private func fixture(named name: String) throws -> Data {
         #expect(throws: (any Error).self) {
             _ = try decoder.decode(AgentEvent.self, from: data)
         }
+    }
+}
+
+@Test func unknownAndFutureReportsRoundTrip() throws {
+    let events = try JSONDecoder().decode([AgentEvent].self, from: fixture(named: "agent-events"))
+    for event in events.suffix(2) {
+        guard case let .report(report) = event, case .unknown = report.payload else {
+            Issue.record("Expected generic payload for unknown or future report")
+            return
+        }
+        let encoded = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(AgentEvent.self, from: encoded)
+        #expect(decoded == event)
+    }
+}
+
+@Test func reportIntegersAcceptTheJSONSafeUpperBound() throws {
+    let reports = [
+        #"{"id":"max-count","sessionId":"s1","sequence":1,"timestamp":"2026-09-22T00:00:00.000Z","type":"report","reportVersion":1,"reportId":"r1","kind":"test_report","title":"Tests","summary":"Max count","payload":{"total":9007199254740991,"passed":9007199254740991,"failed":0,"skipped":0,"failures":[]}}"#,
+        #"{"id":"max-version","sessionId":"s1","sequence":2,"timestamp":"2026-09-22T00:00:00.000Z","type":"report","reportVersion":9007199254740991,"reportId":"r2","kind":"future","title":"Future","summary":"Max version","payload":{}}"#,
+        #"{"id":"max-location","sessionId":"s1","sequence":3,"timestamp":"2026-09-22T00:00:00.000Z","type":"report","reportVersion":1,"reportId":"r3","kind":"diagnostics","title":"Diagnostics","summary":"Max location","payload":{"items":[{"severity":"error","message":"Bad","line":9007199254740991,"column":9007199254740991}]}}"#,
+    ]
+
+    for report in reports {
+        _ = try JSONDecoder().decode(AgentEvent.self, from: Data(report.utf8))
     }
 }
 

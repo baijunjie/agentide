@@ -75,7 +75,7 @@ export class SpawnedCodexAppServer implements CodexAppServerConnection {
     try {
       await this.request("initialize", {
         clientInfo: { name: "agentide", title: "AgentIDE", version: "0.1.0" },
-        capabilities: { experimentalApi: false, requestAttestation: false },
+        capabilities: { experimentalApi: true, requestAttestation: false },
       });
       this.write({ method: "initialized", params: {} });
     } catch (error) {

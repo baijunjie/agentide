@@ -78,7 +78,11 @@ final class MobileConnectionScenarioTests: XCTestCase {
 
         connection.openSession(session)
         await connection.waitForScenarioIdle()
-        XCTAssertEqual(connection.sessionEvents[session.id]?.count, 6)
+        XCTAssertEqual(connection.sessionEvents[session.id]?.count, 11)
+        XCTAssertEqual(connection.sessionEvents[session.id]?.filter {
+            if case .report = $0 { return true }
+            return false
+        }.count, 5)
         XCTAssertEqual(connection.status(for: session), .waitingUser)
 
         connection.respondToApproval(
@@ -113,6 +117,27 @@ final class MobileConnectionScenarioTests: XCTestCase {
         await connection.waitForScenarioIdle()
         XCTAssertEqual(connection.imageList(projectId: "project-demo", path: "assets/logo.png")?.current.relativePath, "assets/logo.png")
         XCTAssertNotNil(connection.image(projectId: "project-demo", path: "assets/logo.png"))
+    }
+
+    func testReportDeliveryDeduplicatesAndInsertsOlderSequencesInOrder() async throws {
+        let connection = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
+        await connection.waitForScenarioIdle()
+        connection.requestSessions(projectId: "project-demo")
+        await connection.waitForScenarioIdle()
+        let session = try XCTUnwrap(connection.sessions["project-demo"]?.first)
+        connection.openSession(session)
+        await connection.waitForScenarioIdle()
+
+        let newest = try reportEnvelope(sequence: 12, reportId: "report-12")
+        let older = try reportEnvelope(sequence: 11, reportId: "report-11")
+        connection.injectScenarioInbound([newest, newest, older])
+        await connection.waitForScenarioIdle()
+
+        XCTAssertEqual(connection.sessionEvents[session.id]?.map(\.sequence), Array(0...12))
+        XCTAssertEqual(connection.sessionEvents[session.id]?.filter {
+            if case .report = $0 { return true }
+            return false
+        }.count, 7)
     }
 
     func testScenarioCanCreateAndCompleteSessionWithoutServices() async throws {
@@ -226,6 +251,34 @@ final class MobileConnectionScenarioTests: XCTestCase {
         await connection.waitForScenarioIdle()
 
         XCTAssertEqual(connection.projects.map(\.id), ["project-demo"])
+    }
+
+    private func reportEnvelope(sequence: Int, reportId: String) throws -> Data {
+        let report: [String: Any] = [
+            "id": "event-\(sequence)",
+            "sessionId": "session-demo",
+            "sequence": sequence,
+            "timestamp": "2026-09-27T00:00:\(String(format: "%02d", sequence)).000Z",
+            "type": "report",
+            "reportVersion": 1,
+            "reportId": reportId,
+            "kind": "plan",
+            "title": "Plan \(sequence)",
+            "summary": "Injected report",
+            "payload": ["steps": [["title": "Verify ordering", "status": "completed"]]]
+        ]
+        let envelope: [String: Any] = [
+            "version": 1,
+            "id": "inbound-\(sequence)-\(reportId)",
+            "type": "agent.event",
+            "sourceDeviceId": "scenario-mac",
+            "targetDeviceId": "scenario-ios",
+            "projectId": "project-demo",
+            "sessionId": "session-demo",
+            "timestamp": "2026-09-27T00:00:00.000Z",
+            "payload": report
+        ]
+        return try JSONSerialization.data(withJSONObject: envelope)
     }
 
     func testFileSearchCoversResultsEmptyLimitFailureAndOffline() async throws {

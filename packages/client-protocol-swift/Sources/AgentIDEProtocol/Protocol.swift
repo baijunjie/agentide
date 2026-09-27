@@ -666,6 +666,205 @@ public struct TurnCompletedEvent: Codable, Equatable, Sendable {
     public let outcome: Outcome
 }
 
+public struct TestReportFailure: Codable, Equatable, Sendable {
+    public let name: String
+    public let message: String?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case name, message }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        message = try decodeOptionalString(container, forKey: .message)
+    }
+}
+
+public struct TestReportPayload: Codable, Equatable, Sendable {
+    public let total: Int
+    public let passed: Int
+    public let failed: Int
+    public let skipped: Int
+    public let failures: [TestReportFailure]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case total, passed, failed, skipped, failures }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        total = try decodeJSONSafeNonNegativeInt(container, forKey: .total)
+        passed = try decodeJSONSafeNonNegativeInt(container, forKey: .passed)
+        failed = try decodeJSONSafeNonNegativeInt(container, forKey: .failed)
+        skipped = try decodeJSONSafeNonNegativeInt(container, forKey: .skipped)
+        failures = try container.decode([TestReportFailure].self, forKey: .failures)
+        let (completed, completedOverflow) = passed.addingReportingOverflow(failed)
+        let (calculatedTotal, totalOverflow) = completed.addingReportingOverflow(skipped)
+        guard !completedOverflow && !totalOverflow && total == calculatedTotal else {
+            throw ProtocolDecodingError.invalidTestReportTotals
+        }
+    }
+}
+
+public struct PlanReportStep: Codable, Equatable, Sendable {
+    public enum Status: String, Codable, Sendable { case pending, inProgress = "in_progress", completed, blocked }
+
+    public let title: String
+    public let status: Status
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case title, status }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decode(String.self, forKey: .title)
+        status = try container.decode(Status.self, forKey: .status)
+    }
+}
+
+public struct PlanReportPayload: Codable, Equatable, Sendable {
+    public let steps: [PlanReportStep]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case steps }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        steps = try decoder.container(keyedBy: CodingKeys.self).decode([PlanReportStep].self, forKey: .steps)
+    }
+}
+
+public struct TodoReportItem: Codable, Equatable, Sendable {
+    public enum Status: String, Codable, Sendable { case notStarted = "not_started", inProgress = "in_progress", completed, blocked }
+
+    public let title: String
+    public let status: Status
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case title, status }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = try container.decode(String.self, forKey: .title)
+        status = try container.decode(Status.self, forKey: .status)
+    }
+}
+
+public struct TodoReportPayload: Codable, Equatable, Sendable {
+    public let items: [TodoReportItem]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case items }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        items = try decoder.container(keyedBy: CodingKeys.self).decode([TodoReportItem].self, forKey: .items)
+    }
+}
+
+public struct DiagnosticReportItem: Codable, Equatable, Sendable {
+    public enum Severity: String, Codable, Sendable { case error, warning, info }
+
+    public let severity: Severity
+    public let message: String
+    public let relativePath: String?
+    public let line: Int?
+    public let column: Int?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case severity, message, relativePath, line, column }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        severity = try container.decode(Severity.self, forKey: .severity)
+        message = try container.decode(String.self, forKey: .message)
+        relativePath = try decodeOptionalString(container, forKey: .relativePath)
+        line = try decodeOptionalJSONSafePositiveInt(container, forKey: .line)
+        column = try decodeOptionalJSONSafePositiveInt(container, forKey: .column)
+        if let relativePath, !isProjectRelativePath(relativePath) { throw ProtocolDecodingError.invalidRelativePath(relativePath) }
+        if column != nil && line == nil { throw ProtocolDecodingError.columnWithoutLine }
+    }
+}
+
+public struct DiagnosticsReportPayload: Codable, Equatable, Sendable {
+    public let items: [DiagnosticReportItem]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case items }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        items = try decoder.container(keyedBy: CodingKeys.self).decode([DiagnosticReportItem].self, forKey: .items)
+    }
+}
+
+public enum ReportPayload: Equatable, Sendable {
+    case testReport(TestReportPayload)
+    case plan(PlanReportPayload)
+    case todo(TodoReportPayload)
+    case diagnostics(DiagnosticsReportPayload)
+    case unknown([String: JSONValue])
+}
+
+public struct ReportEvent: Codable, Equatable, Sendable {
+    public let id: String
+    public let sessionId: String
+    public let sequence: Int
+    public let timestamp: String
+    public let type: String
+    public let reportVersion: Int
+    public let reportId: String
+    public let kind: String
+    public let title: String
+    public let summary: String
+    public let payload: ReportPayload
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, sessionId, sequence, timestamp, type, reportVersion, reportId, kind, title, summary, payload
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try decodeNonEmptyString(container, forKey: .id)
+        sessionId = try decodeNonEmptyString(container, forKey: .sessionId)
+        sequence = try decodeNonNegativeInt(container, forKey: .sequence)
+        timestamp = try container.decode(String.self, forKey: .timestamp)
+        guard isTimestamp(timestamp) else { throw ProtocolDecodingError.invalidTimestamp(timestamp) }
+        type = try container.decode(String.self, forKey: .type)
+        guard type == "report" else { throw ProtocolDecodingError.invalidReportType(type) }
+        reportVersion = try decodeJSONSafePositiveInt(container, forKey: .reportVersion)
+        reportId = try decodeNonEmptyString(container, forKey: .reportId)
+        kind = try container.decode(String.self, forKey: .kind)
+        title = try decodeNonEmptyString(container, forKey: .title)
+        summary = try container.decode(String.self, forKey: .summary)
+        switch (reportVersion, kind) {
+        case (1, "test_report"): payload = .testReport(try container.decode(TestReportPayload.self, forKey: .payload))
+        case (1, "plan"): payload = .plan(try container.decode(PlanReportPayload.self, forKey: .payload))
+        case (1, "todo"): payload = .todo(try container.decode(TodoReportPayload.self, forKey: .payload))
+        case (1, "diagnostics"): payload = .diagnostics(try container.decode(DiagnosticsReportPayload.self, forKey: .payload))
+        default: payload = .unknown(try container.decode([String: JSONValue].self, forKey: .payload))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(sessionId, forKey: .sessionId)
+        try container.encode(sequence, forKey: .sequence)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(type, forKey: .type)
+        try container.encode(reportVersion, forKey: .reportVersion)
+        try container.encode(reportId, forKey: .reportId)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(title, forKey: .title)
+        try container.encode(summary, forKey: .summary)
+        switch payload {
+        case let .testReport(value): try container.encode(value, forKey: .payload)
+        case let .plan(value): try container.encode(value, forKey: .payload)
+        case let .todo(value): try container.encode(value, forKey: .payload)
+        case let .diagnostics(value): try container.encode(value, forKey: .payload)
+        case let .unknown(value): try container.encode(value, forKey: .payload)
+        }
+    }
+}
+
 public enum AgentEvent: Codable, Equatable, Sendable {
     case sessionStarted(SessionStartedEvent)
     case textDelta(TextDeltaEvent)
@@ -680,6 +879,7 @@ public enum AgentEvent: Codable, Equatable, Sendable {
     case error(ErrorEvent)
     case turnCompleted(TurnCompletedEvent)
     case sessionCompleted(SessionCompletedEvent)
+    case report(ReportEvent)
 
     private enum CodingKeys: String, CodingKey { case id, sessionId, sequence, timestamp, type }
 
@@ -721,6 +921,7 @@ public enum AgentEvent: Codable, Equatable, Sendable {
         case "error": self = .error(try ErrorEvent(from: decoder))
         case "turn.completed": self = .turnCompleted(try TurnCompletedEvent(from: decoder))
         case "session.completed": self = .sessionCompleted(try SessionCompletedEvent(from: decoder))
+        case "report": self = .report(try ReportEvent(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type,
@@ -745,6 +946,7 @@ public enum AgentEvent: Codable, Equatable, Sendable {
         case let .error(event): try event.encode(to: encoder)
         case let .turnCompleted(event): try event.encode(to: encoder)
         case let .sessionCompleted(event): try event.encode(to: encoder)
+        case let .report(event): try event.encode(to: encoder)
         }
     }
 }
@@ -809,13 +1011,18 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
 private enum ProtocolDecodingError: Error {
     case invalidSearchRequest
     case binaryDiff
+    case columnWithoutLine
     case emptyActions
     case emptyString(String)
     case explicitNull(String)
     case invalidMessageType(String)
+    case invalidRelativePath(String)
+    case invalidReportType(String)
+    case invalidJSONSafeInteger(Int)
     case negativeSize(Int)
     case invalidSequence(Int)
     case invalidTimestamp(String)
+    case invalidTestReportTotals
     case missingRenamedPath
     case nonGitRepositoryChanges
     case unknownFields([String])
@@ -885,6 +1092,50 @@ private func decodeOptionalNonNegativeInt<Key: CodingKey>(
     return value
 }
 
+private func decodeNonNegativeInt<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) throws -> Int {
+    let value = try container.decode(Int.self, forKey: key)
+    guard value >= 0 else { throw ProtocolDecodingError.negativeSize(value) }
+    return value
+}
+
+private let maximumJSONSafeInteger = 9_007_199_254_740_991
+
+private func decodeJSONSafeNonNegativeInt<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) throws -> Int {
+    let value = try container.decode(Int.self, forKey: key)
+    guard value >= 0, value <= maximumJSONSafeInteger else {
+        throw ProtocolDecodingError.invalidJSONSafeInteger(value)
+    }
+    return value
+}
+
+private func decodeJSONSafePositiveInt<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) throws -> Int {
+    let value = try container.decode(Int.self, forKey: key)
+    guard value > 0, value <= maximumJSONSafeInteger else {
+        throw ProtocolDecodingError.invalidJSONSafeInteger(value)
+    }
+    return value
+}
+
+private func decodeOptionalJSONSafePositiveInt<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) throws -> Int? {
+    guard container.contains(key) else { return nil }
+    guard try !container.decodeNil(forKey: key) else {
+        throw ProtocolDecodingError.explicitNull(key.stringValue)
+    }
+    return try decodeJSONSafePositiveInt(container, forKey: key)
+}
+
 private func decodeOptionalJSONValue<Key: CodingKey>(
     _ container: KeyedDecodingContainer<Key>,
     forKey key: Key
@@ -951,4 +1202,12 @@ private func isTimestamp(_ value: String) -> Bool {
         && (0...23).contains(hour)
         && (0...59).contains(minute)
         && (0...59).contains(second)
+}
+
+private func isProjectRelativePath(_ value: String) -> Bool {
+    !value.isEmpty &&
+        !value.hasPrefix("/") &&
+        value.range(of: #"^[A-Za-z]:/"#, options: .regularExpression) == nil &&
+        !value.contains("\\") &&
+        value.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
 }

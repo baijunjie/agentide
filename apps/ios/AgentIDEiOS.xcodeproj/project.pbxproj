@@ -24,6 +24,7 @@
 		B10000000000000000000043 /* ChangesDiffLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000044 /* ChangesDiffLifecycle.swift */; };
 		B10000000000000000000045 /* MobileConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000046 /* MobileConnection.swift */; };
 		B10000000000000000000047 /* MobileRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000048 /* MobileRecovery.swift */; };
+		B10000000000000000000049 /* ReportViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000004A /* ReportViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,6 +47,7 @@
 		B10000000000000000000044 /* ChangesDiffLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesDiffLifecycle.swift; sourceTree = "<group>"; };
 		B10000000000000000000046 /* MobileConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileConnection.swift; sourceTree = "<group>"; };
 		B10000000000000000000048 /* MobileRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRecovery.swift; sourceTree = "<group>"; };
+		B1000000000000000000004A /* ReportViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -56,7 +58,7 @@
 
 /* Begin PBXGroup section */
 		B10000000000000000000007 = {isa = PBXGroup; children = (B10000000000000000000008 /* AgentIDEiOS */, B10000000000000000000025 /* AgentIDEiOSTests */, B10000000000000000000039 /* AgentIDEiOSUITests */, B10000000000000000000009 /* Products */,); sourceTree = "<group>"; };
-		B10000000000000000000008 /* AgentIDEiOS */ = {isa = PBXGroup; children = (B10000000000000000000002 /* App.swift */, B10000000000000000000046 /* MobileConnection.swift */, B10000000000000000000048 /* MobileRecovery.swift */, B1000000000000000000002F /* MobileScenario.swift */, B10000000000000000000016 /* MobileViews.swift */, B10000000000000000000018 /* MobileSupport.swift */, B1000000000000000000001A /* FileViewers.swift */, B1000000000000000000001C /* SessionViews.swift */, B1000000000000000000001E /* WorkspaceNavigation.swift */, B10000000000000000000042 /* ChangesViews.swift */, B10000000000000000000044 /* ChangesDiffLifecycle.swift */,); path = AgentIDEiOS; sourceTree = "<group>"; };
+		B10000000000000000000008 /* AgentIDEiOS */ = {isa = PBXGroup; children = (B10000000000000000000002 /* App.swift */, B10000000000000000000046 /* MobileConnection.swift */, B10000000000000000000048 /* MobileRecovery.swift */, B1000000000000000000002F /* MobileScenario.swift */, B10000000000000000000016 /* MobileViews.swift */, B10000000000000000000018 /* MobileSupport.swift */, B1000000000000000000001A /* FileViewers.swift */, B1000000000000000000001C /* SessionViews.swift */, B1000000000000000000004A /* ReportViews.swift */, B1000000000000000000001E /* WorkspaceNavigation.swift */, B10000000000000000000042 /* ChangesViews.swift */, B10000000000000000000044 /* ChangesDiffLifecycle.swift */,); path = AgentIDEiOS; sourceTree = "<group>"; };
 		B10000000000000000000009 /* Products */ = {isa = PBXGroup; children = (B10000000000000000000005 /* AgentIDEiOS.app */, B10000000000000000000020 /* AgentIDEiOSTests.xctest */, B10000000000000000000037 /* AgentIDEiOSUITests.xctest */,); name = Products; sourceTree = "<group>"; };
 		B10000000000000000000025 /* AgentIDEiOSTests */ = {isa = PBXGroup; children = (B10000000000000000000022 /* FileBrowserRecoveryStateTests.swift */, B10000000000000000000031 /* MobileScenarioTests.swift */, B10000000000000000000033 /* MobileConnectionScenarioTests.swift */,); path = AgentIDEiOSTests; sourceTree = "<group>"; };
 		B10000000000000000000039 /* AgentIDEiOSUITests */ = {isa = PBXGroup; children = (B10000000000000000000035 /* ScenarioSmokeUITests.swift */,); path = AgentIDEiOSUITests; sourceTree = "<group>"; };
@@ -79,7 +81,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		B1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001 /* App.swift in Sources */, B10000000000000000000045 /* MobileConnection.swift in Sources */, B10000000000000000000047 /* MobileRecovery.swift in Sources */, B1000000000000000000002E /* MobileScenario.swift in Sources */, B10000000000000000000015 /* MobileViews.swift in Sources */, B10000000000000000000017 /* MobileSupport.swift in Sources */, B10000000000000000000019 /* FileViewers.swift in Sources */, B1000000000000000000001B /* SessionViews.swift in Sources */, B1000000000000000000001D /* WorkspaceNavigation.swift in Sources */, B10000000000000000000041 /* ChangesViews.swift in Sources */, B10000000000000000000043 /* ChangesDiffLifecycle.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		B1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001 /* App.swift in Sources */, B10000000000000000000045 /* MobileConnection.swift in Sources */, B10000000000000000000047 /* MobileRecovery.swift in Sources */, B1000000000000000000002E /* MobileScenario.swift in Sources */, B10000000000000000000015 /* MobileViews.swift in Sources */, B10000000000000000000017 /* MobileSupport.swift in Sources */, B10000000000000000000019 /* FileViewers.swift in Sources */, B1000000000000000000001B /* SessionViews.swift in Sources */, B10000000000000000000049 /* ReportViews.swift in Sources */, B1000000000000000000001D /* WorkspaceNavigation.swift in Sources */, B10000000000000000000041 /* ChangesViews.swift in Sources */, B10000000000000000000043 /* ChangesDiffLifecycle.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 		B10000000000000000000028 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000021 /* FileBrowserRecoveryStateTests.swift in Sources */, B10000000000000000000030 /* MobileScenarioTests.swift in Sources */, B10000000000000000000032 /* MobileConnectionScenarioTests.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 		B1000000000000000000003C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000034 /* ScenarioSmokeUITests.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */

@@ -1,5 +1,6 @@
 export {
   ClaudeAdapter,
+  createReportServer,
   type ClaudeAdapterOptions,
   type ClaudeQueryFactory,
   type ClaudeQueryRequest,

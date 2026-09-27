@@ -56,8 +56,26 @@ macOS、iOS、Relay Server 与 Agent Host 通过同一套版本化 JSON 契约�
 | `error` | 带稳定错误码、消息和可恢复标记的错误。 |
 | `turn.completed` | 当前轮次以完成、失败或取消结束；会话随后仍可继续。 |
 | `session.completed` | 整个会话以完成、失败或取消终止。 |
+| `report` | 版本化结构报告；已知类型使用封闭 payload，未知类型或未来版本保留为通用报告。 |
 
 事件中的工具输入、工具输出和错误详情是未解释的 JSON 值；其中显式 `null` 必须在跨语言编解码后保留。事件判别仅使用统一的 `type` 字段，不使用 Agent 原生字段替代。
+
+### 结构化报告
+
+`report` 事件除公共事件字段外，还包含正整数 `reportVersion`、非空 `reportId`、`kind`、非空 `title`、`summary` 和对象形式的 `payload`。报告中的整数字段必须在 JSON 安全整数范围内（上限 `9007199254740991`）。首版 `reportVersion` 为 `1`，定义四种已知报告：
+
+| `kind` | payload 契约 |
+| --- | --- |
+| `test_report` | `total`、`passed`、`failed`、`skipped` 为非负整数，且后三者之和必须等于 `total`；`failures` 给出失败名称与可选消息。 |
+| `plan` | `steps` 按顺序列出标题，状态为 `pending`、`in_progress`、`completed` 或 `blocked`。 |
+| `todo` | `items` 列出标题，状态为 `not_started`、`in_progress`、`completed` 或 `blocked`。 |
+| `diagnostics` | `items` 的严重级别为 `error`、`warning` 或 `info`，包含消息以及可选的项目内相对路径、正整数行列；列存在时行必须存在。 |
+
+已知首版报告拒绝 payload 中的额外字段。诊断路径必须是使用 `/` 分段的非空项目相对路径，不接受绝对路径、反斜杠、空路径段以及 `.` 或 `..` 路径段。
+
+客户端必须接受未知 `kind` 和高于当前支持范围的 `reportVersion`，把其对象 payload 保留为未解释的 JSON，并以通用报告呈现；已知 `reportVersion: 1` 与已知 `kind` 的组合仍必须严格满足对应 payload，不能因字段错误退回未知报告。客户端只以纯文本和固定原生组件呈现报告，不解释或执行字段中的 HTML、脚本及未知 payload。
+
+`test_report` 的计数和式属于 JSON Schema 无法表达的跨字段语义约束。只依赖 Schema 校验的消费者还必须执行等价的运行时检查；当前 TypeScript 运行时校验器和 Swift DTO 都会拒绝不满足和式的报告。
 
 ## Agent Adapter
 
@@ -84,4 +102,4 @@ Claude 与 Codex 的现行能力、会话恢复以及统一事件的持久化和
 - `ProjectChangesResponse` 以 `isGitRepository` 区分非 Git 项目与 Git 工作树，并返回 `GitChange` 列表；非 Git 项目的列表必须为空。`ProjectDiffRequest` 只包含项目内相对路径和变更区域。`ProjectDiffResponse` 回显对应变更并可携带统一 diff；二进制变更禁止携带 `diff`。
 - `SessionSnapshot` 是远程客户端恢复会话的一致视图：`session` 和 `currentStatus` 给出同一时点的会话状态，`recentEvents` 包含最近最多 200 条持久化事件，`pendingInteractions` 单独列出仍待回应的审批与问题，`latestSequence` 是完整持久化事件流的最新序列号（空流为 `-1`）。最新序列号可以高于 `recentEvents` 窗口的首条序列号，客户端不应把该窗口当作完整历史。
 
-Envelope 与 `AgentEvent` 由 TypeScript 运行时校验器、Draft 2020-12 JSON Schema 和 Swift `Codable` DTO 共同消费正反例 fixtures，以固定跨语言的接受与拒绝行为。`Project`、`Session`、`FileEntry`、项目文件搜索和 Git Changes/Diff 对象当前只有 TypeScript 静态类型、JSON Schema 与 Swift DTO，没有独立的 TypeScript 运行时守卫；前三者以正例 fixture 验证共同解码，项目文件搜索、Git Changes/Diff 对象与 `SessionSnapshot` 同时使用正反例 fixtures 验证字段组合和拒绝边界。协议字段、枚举或可选值语义变化时，相关类型、Schema、DTO 与覆盖该边界的 fixtures 必须同步更新。
+Envelope 与 `AgentEvent` 由 TypeScript 运行时校验器、Draft 2020-12 JSON Schema 和 Swift `Codable` DTO 共同消费正反例 fixtures，以固定各自可表达边界内的跨语言接受与拒绝行为；Schema 无法表达的跨字段语义另用运行时反例 fixture 固定。`Project`、`Session`、`FileEntry`、项目文件搜索和 Git Changes/Diff 对象当前只有 TypeScript 静态类型、JSON Schema 与 Swift DTO，没有独立的 TypeScript 运行时守卫；前三者以正例 fixture 验证共同解码，项目文件搜索、Git Changes/Diff 对象与 `SessionSnapshot` 同时使用正反例 fixtures 验证字段组合和拒绝边界。协议字段、枚举或可选值语义变化时，相关类型、Schema、DTO 与覆盖该边界的 fixtures 必须同步更新。

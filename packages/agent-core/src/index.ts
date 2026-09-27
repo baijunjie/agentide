@@ -1,5 +1,6 @@
 import type { AgentType, Session, SessionStatus } from "@agentide/shared-types";
 import { isProtocolTimestamp } from "@agentide/protocol";
+import { z } from "zod";
 
 export interface BaseEvent {
   id: string;
@@ -101,6 +102,118 @@ export interface TurnCompletedEvent extends BaseEvent {
   outcome: "completed" | "failed" | "cancelled";
 }
 
+export interface TestReportFailure {
+  name: string;
+  message?: string;
+}
+
+export interface TestReportPayload {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  failures: TestReportFailure[];
+}
+
+export interface PlanReportPayload {
+  steps: { title: string; status: "pending" | "in_progress" | "completed" | "blocked" }[];
+}
+
+export interface TodoReportPayload {
+  items: { title: string; status: "not_started" | "in_progress" | "completed" | "blocked" }[];
+}
+
+export interface DiagnosticsReportPayload {
+  items: {
+    severity: "error" | "warning" | "info";
+    message: string;
+    relativePath?: string;
+    line?: number;
+    column?: number;
+  }[];
+}
+
+const projectRelativePathSchema = z.string().min(1).regex(
+  /^(?!\/)(?![A-Za-z]:\/)(?!.*\\)(?!.*(?:^|\/)\.{1,2}(?:\/|$))(?!.*\/\/)(?!.+\/$).+$/,
+);
+
+const reportInputFields = {
+  reportVersion: z.literal(1),
+  reportId: z.string().min(1),
+  title: z.string().min(1),
+  summary: z.string(),
+};
+
+const testReportPayloadSchema = z.object({
+  total: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  passed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  failed: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  skipped: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  failures: z.array(z.object({ name: z.string(), message: z.string().optional() }).strict()),
+}).strict().refine(
+  ({ total, passed, failed, skipped }) => total === passed + failed + skipped,
+  "Test report totals must equal passed + failed + skipped",
+);
+
+const planReportPayloadSchema = z.object({
+  steps: z.array(z.object({
+    title: z.string(),
+    status: z.enum(["pending", "in_progress", "completed", "blocked"]),
+  }).strict()),
+}).strict();
+
+const todoReportPayloadSchema = z.object({
+  items: z.array(z.object({
+    title: z.string(),
+    status: z.enum(["not_started", "in_progress", "completed", "blocked"]),
+  }).strict()),
+}).strict();
+
+const diagnosticsReportPayloadSchema = z.object({
+  items: z.array(z.object({
+    severity: z.enum(["error", "warning", "info"]),
+    message: z.string(),
+    relativePath: projectRelativePathSchema.optional(),
+    line: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    column: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  }).strict().refine(({ column, line }) => column === undefined || line !== undefined, "Diagnostic columns require a line")),
+}).strict();
+
+/** Shared v1 model-tool contract; adapter schemas are derived from this definition. */
+export const reportInputSchema = z.discriminatedUnion("kind", [
+  z.object({ ...reportInputFields, kind: z.literal("test_report"), payload: testReportPayloadSchema }).strict(),
+  z.object({ ...reportInputFields, kind: z.literal("plan"), payload: planReportPayloadSchema }).strict(),
+  z.object({ ...reportInputFields, kind: z.literal("todo"), payload: todoReportPayloadSchema }).strict(),
+  z.object({ ...reportInputFields, kind: z.literal("diagnostics"), payload: diagnosticsReportPayloadSchema }).strict(),
+]);
+
+export type ReportInputV1 = z.infer<typeof reportInputSchema>;
+
+export const reportInputJsonSchema = z.toJSONSchema(reportInputSchema);
+
+export function parseReportInput(value: unknown): ReportInputV1 | undefined {
+  const result = reportInputSchema.safeParse(value);
+  return result.success ? result.data : undefined;
+}
+
+export type ReportPayload = ReportInputV1["payload"] | Record<string, unknown>;
+
+export type ReportEventInput = { type: "report" } & ReportInputV1;
+
+export type KnownReportEvent = BaseEvent & ReportEventInput;
+
+export interface UnknownReportEvent extends BaseEvent {
+  type: "report";
+  reportVersion: number;
+  reportId: string;
+  kind: string;
+  title: string;
+  summary: string;
+  payload: ReportPayload;
+}
+
+export type ReportEvent = KnownReportEvent | UnknownReportEvent;
+
 export type AgentEvent =
   | SessionStartedEvent
   | TextDeltaEvent
@@ -114,7 +227,8 @@ export type AgentEvent =
   | StatusEvent
   | ErrorEvent
   | TurnCompletedEvent
-  | SessionCompletedEvent;
+  | SessionCompletedEvent
+  | ReportEvent;
 
 export type PendingInteraction = ApprovalRequestedEvent | QuestionRequestedEvent;
 
@@ -240,9 +354,73 @@ export function isAgentEvent(value: unknown): value is AgentEvent {
         typeof value.outcome === "string" &&
         ["completed", "failed", "cancelled"].includes(value.outcome)
       );
+    case "report":
+      return isReportEvent(value);
     default:
       return false;
   }
+}
+
+export function isReportEvent(value: unknown): value is ReportEvent {
+  if (
+    !isRecord(value) ||
+    !isBaseEvent(value) ||
+    value.type !== "report" ||
+    !hasOnlyKeys(value, [
+      "id",
+      "sessionId",
+      "sequence",
+      "timestamp",
+      "type",
+      "reportVersion",
+      "reportId",
+      "kind",
+      "title",
+      "summary",
+      "payload",
+    ]) ||
+    !isPositiveInteger(value.reportVersion) ||
+    !isNonEmptyString(value.reportId) ||
+    typeof value.kind !== "string" ||
+    !isNonEmptyString(value.title) ||
+    typeof value.summary !== "string" ||
+    !isRecord(value.payload)
+  ) {
+    return false;
+  }
+
+  if (value.reportVersion !== 1) {
+    return true;
+  }
+
+  if (!["test_report", "plan", "todo", "diagnostics"].includes(value.kind)) {
+    return true;
+  }
+
+  return parseReportInput({
+    reportVersion: value.reportVersion,
+    reportId: value.reportId,
+    kind: value.kind,
+    title: value.title,
+    summary: value.summary,
+    payload: value.payload,
+  }) !== undefined;
+}
+
+export function isKnownReportEvent(value: unknown): value is KnownReportEvent {
+  return (
+    isReportEvent(value) &&
+    value.reportVersion === 1 &&
+    ["test_report", "plan", "todo", "diagnostics"].includes(value.kind)
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && typeof value === "number" && value > 0;
 }
 
 function isBaseEvent(value: Record<string, unknown>): boolean {

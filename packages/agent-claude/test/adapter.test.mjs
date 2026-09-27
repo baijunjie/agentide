@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ClaudeAdapter } from "../dist/index.js";
+import { ClaudeAdapter, createReportServer } from "../dist/index.js";
 
 class EventStream {
   buffered = [];
@@ -25,6 +25,13 @@ class EventStream {
     };
   }
 }
+
+const reports = [
+  { reportVersion: 1, reportId: "test", kind: "test_report", title: "Tests", summary: "All tests passed", payload: { total: 1, passed: 1, failed: 0, skipped: 0, failures: [] } },
+  { reportVersion: 1, reportId: "plan", kind: "plan", title: "Plan", summary: "One step", payload: { steps: [{ title: "Implement", status: "pending" }] } },
+  { reportVersion: 1, reportId: "todo", kind: "todo", title: "Todo", summary: "One item", payload: { items: [{ title: "Review", status: "not_started" }] } },
+  { reportVersion: 1, reportId: "diagnostics", kind: "diagnostics", title: "Diagnostics", summary: "One warning", payload: { items: [{ severity: "warning", message: "Check this", relativePath: "src/app.ts", line: 1, column: 1 }] } },
+];
 
 test("Claude adapter maps SDK streaming, tools, commands, completion, and resume", async () => {
   const requests = [];
@@ -92,6 +99,69 @@ test("Claude adapter maps SDK streaming, tools, commands, completion, and resume
   streams[1].close();
   assert.ok(native.length >= 4);
   await adapter.close();
+});
+
+test("Claude adapter records first-party report tool calls without approval", async () => {
+  let invalidReportAccepted;
+  let unknownReportAccepted;
+  const adapter = new ClaudeAdapter({
+    query(request) {
+      return (async function* () {
+        for (const [index, report] of reports.entries()) {
+          const permission = await request.canUseTool("mcp__agentide__report", report, {
+            signal: request.abortController.signal,
+            toolUseID: `report-${index}`,
+            requestId: `report-request-${index}`,
+          });
+          assert.equal(permission.behavior, "allow");
+          assert.equal(request.report(report), true);
+          yield {
+            type: "assistant",
+            parent_tool_use_id: null,
+            message: { content: [{ type: "tool_use", id: `report-${index}`, name: "mcp__agentide__report", input: report }] },
+          };
+        }
+        invalidReportAccepted = request.report({ ...reports[0], payload: { total: 1, passed: 0, failed: 0, skipped: 0, failures: [] } });
+        unknownReportAccepted = request.report({ ...reports[0], kind: "unknown" });
+        yield { type: "result", subtype: "success", is_error: false, result: "Done" };
+      })();
+    },
+  });
+  const session = await adapter.createSession({ sessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", projectId: "p", workingDirectory: "/p" });
+  const events = adapter.events(session.id)[Symbol.asyncIterator]();
+  await events.next();
+  await adapter.sendMessage(session.id, { content: "Publish reports" });
+  await events.next();
+  await events.next();
+  for (const report of reports) {
+    const event = (await events.next()).value;
+    assert.equal(event.type, "report");
+    assert.equal(event.kind, report.kind);
+  }
+  assert.equal((await events.next()).value.status, "idle");
+  assert.equal((await events.next()).value.type, "turn.completed");
+  assert.equal(invalidReportAccepted, false);
+  assert.equal(unknownReportAccepted, false);
+  await adapter.close();
+});
+
+test("Claude report MCP registration exposes the closed v1 schema and handler", async () => {
+  const published = [];
+  const server = createReportServer((input) => {
+    published.push(input);
+    return input === reports[0];
+  });
+  const registered = server.instance._registeredTools.report;
+  assert.equal(registered.inputSchema.safeParse(reports[0]).success, true);
+  assert.equal(registered.inputSchema.safeParse({ ...reports[0], type: "error" }).success, false);
+  assert.equal(registered.inputSchema.safeParse({ ...reports[0], extra: true }).success, false);
+  assert.equal(registered.inputSchema.safeParse({ ...reports[0], kind: "todo", payload: { steps: [] } }).success, false);
+
+  const success = await registered.handler(reports[0]);
+  const failure = await registered.handler({ ...reports[0], extra: true });
+  assert.deepEqual(success, { content: [{ type: "text", text: "Report published." }] });
+  assert.deepEqual(failure, { content: [{ type: "text", text: "Report input is invalid." }], isError: true });
+  assert.deepEqual(published, [reports[0], { ...reports[0], extra: true }]);
 });
 
 test("Claude adapter maps permission requests and session approval suggestions", async () => {

@@ -6,7 +6,9 @@ import type {
   ApprovalAction,
   CreateSessionOptions,
   InteractionResponse,
+  ReportEventInput,
 } from "@agentide/agent-core";
+import { parseReportInput, reportInputJsonSchema } from "@agentide/agent-core";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { CodexAppServerConnection, CodexNotification, CodexServerRequest } from "./app-server.js";
 import { SpawnedCodexAppServer } from "./app-server.js";
@@ -70,6 +72,7 @@ export class CodexAdapter implements AgentAdapter {
       sandbox: "workspace-write",
       serviceName: "agentide",
       threadSource: "appServer",
+      dynamicTools: REPORT_DYNAMIC_TOOLS,
     });
     const threadId = readNestedString(result, "thread", "id");
     const timestamp = this.now().toISOString();
@@ -315,6 +318,10 @@ export class CodexAdapter implements AgentAdapter {
 
   private handleServerRequest(request: CodexServerRequest): void {
     this.captureNativeEvent(request);
+    if (request.method === "item/tool/call") {
+      this.handleToolCall(request);
+      return;
+    }
     if (request.method !== "item/commandExecution/requestApproval" && request.method !== "item/fileChange/requestApproval") {
       this.connection.respondError(request.id, -32601, `Unsupported Codex request: ${request.method}`);
       return;
@@ -349,6 +356,38 @@ export class CodexAdapter implements AgentAdapter {
     if (command !== undefined) event.command = command;
     this.emit(state, event);
     this.emit(state, { type: "status", status: "waiting_user" });
+  }
+
+  private handleToolCall(request: CodexServerRequest): void {
+    const params = asOptionalRecord(request.params);
+    if (
+      params === undefined ||
+      params.namespace !== "agentide" ||
+      params.tool !== "report" ||
+      typeof params.threadId !== "string"
+    ) {
+      this.respondToToolCall(request.id, false, "Unknown or invalid AgentIDE tool call.");
+      return;
+    }
+    const state = this.sessionByThread.get(params.threadId);
+    if (state === undefined) {
+      this.respondToToolCall(request.id, false, "The AgentIDE session is no longer available.");
+      return;
+    }
+    const event = reportEvent(params.arguments);
+    if (event === undefined) {
+      this.respondToToolCall(request.id, false, "Report input is invalid.");
+      return;
+    }
+    this.emit(state, event);
+    this.respondToToolCall(request.id, true, "Report published.");
+  }
+
+  private respondToToolCall(id: string | number, success: boolean, text: string): void {
+    this.connection.respond(id, {
+      success,
+      contentItems: [{ type: "inputText", text }],
+    });
   }
 
   private async ensureLoaded(state: SessionState): Promise<void> {
@@ -408,6 +447,28 @@ type AgentEventInput = AgentEvent extends infer Event
 type CommandEventInput = Extract<AgentEventInput, { type: "command" }>;
 type ToolFinishedEventInput = Extract<AgentEventInput, { type: "tool.finished" }>;
 type ApprovalEventInput = Extract<AgentEventInput, { type: "approval.requested" }>;
+
+const REPORT_DYNAMIC_TOOLS = [{
+  type: "namespace",
+  name: "agentide",
+  description: "AgentIDE first-party structured reporting tools",
+  tools: [{
+    type: "function",
+    name: "report",
+    description: "Publish a structured test report, plan, todo list, or diagnostics report to AgentIDE. Do not use this for ordinary progress updates or prose.",
+    inputSchema: reportInputJsonSchema,
+    deferLoading: false,
+  }],
+}];
+
+function reportEvent(input: unknown): ReportEventInput | undefined {
+  const report = parseReportInput(input);
+  if (report === undefined) return undefined;
+  return {
+    type: "report",
+    ...report,
+  };
+}
 
 class AsyncEventQueue implements AsyncIterable<AgentEvent> {
   private readonly buffered: AgentEvent[] = [];
@@ -487,6 +548,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
-  if (value === undefined || value === null) return undefined;
-  return asRecord(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
 }

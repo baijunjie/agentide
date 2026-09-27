@@ -88,6 +88,9 @@ importers:
       '@agentide/shared-types':
         specifier: workspace:*
         version: link:../shared-types
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
 
   packages/crypto: {}
 

@@ -666,6 +666,7 @@ private func eventIdentity(_ event: AgentEvent) -> (sessionId: String, sequence:
     case let .toolFinished(value): return (value.sessionId, value.sequence)
     case let .command(value): return (value.sessionId, value.sequence)
     case let .fileChanged(value): return (value.sessionId, value.sequence)
+    case let .report(value): return (value.sessionId, value.sequence)
     case let .approvalRequested(value): return (value.sessionId, value.sequence)
     case let .questionRequested(value): return (value.sessionId, value.sequence)
     case let .status(value): return (value.sessionId, value.sequence)

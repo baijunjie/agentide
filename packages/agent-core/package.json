@@ -8,7 +8,8 @@
   "exports": "./dist/index.js",
   "dependencies": {
     "@agentide/protocol": "workspace:*",
-    "@agentide/shared-types": "workspace:*"
+    "@agentide/shared-types": "workspace:*",
+    "zod": "^4.6.5"
   },
   "scripts": {
     "build": "tsc -b",

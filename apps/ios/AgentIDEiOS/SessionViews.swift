@@ -51,6 +51,7 @@ extension AgentEvent {
         case let .error(event): event.sequence
         case let .turnCompleted(event): event.sequence
         case let .sessionCompleted(event): event.sequence
+        case let .report(event): event.sequence
         }
     }
 }
@@ -199,8 +200,8 @@ private struct AgentSessionView: View {
     private var isSending: Bool { connection.activeSessionOperations.contains("send:\(session.id)") }
 
     var body: some View {
-        WorkspaceNavigationContainer(navigation: $workspace) {
-            sessionContent
+        WorkspaceNavigationContainer(navigation: $workspace) { navigationInset in
+            sessionContent(topClearance: navigationInset)
         } browserContent: {
             FileBrowserContent(
                 project: project,
@@ -270,8 +271,8 @@ private struct AgentSessionView: View {
             }
         }
         .onChange(of: workspace) { connection.persistWorkspaceNavigation(workspace, for: session.id) }
-        .onChange(of: connection.changesCompletion(projectId: project.id)) { _, completion in
-            completeChangedFileNavigation(completion)
+        .onReceive(connection.$changesCompletions) { completions in
+            completeChangedFileNavigation(completions[project.id])
         }
     }
 
@@ -285,11 +286,14 @@ private struct AgentSessionView: View {
         }
     }
 
-    private var sessionContent: some View {
+    private func sessionContent(topClearance: CGFloat) -> some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
+                        Color.clear
+                            .frame(height: topClearance)
+                            .accessibilityHidden(true)
                         if events.isEmpty {
                             if connection.subscribingSessions.contains(session.id) {
                                 ProgressView("Loading activity…").frame(maxWidth: .infinity).padding(.top, 40)
@@ -299,7 +303,13 @@ private struct AgentSessionView: View {
                             }
                         }
                         ForEach(connection.sessionFeedItems[session.id] ?? []) { item in
-                            FeedBlock(item: item, session: session, project: project, openChangedFile: openChangedFile).id(item.id)
+                            FeedBlock(
+                                item: item,
+                                session: session,
+                                project: project,
+                                openChangedFile: openChangedFile,
+                                openReportFile: openReportFile
+                            ).id(item.id)
                         }
                         if let error = connection.sessionError(for: session.id) {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -310,6 +320,7 @@ private struct AgentSessionView: View {
                     }
                     .padding()
                 }
+                .accessibilityIdentifier("session-feed")
                 .onChange(of: events.last?.sequence) {
                     guard let id = connection.sessionFeedItems[session.id]?.last?.id else { return }
                     proxy.scrollTo(id, anchor: .bottom)
@@ -354,11 +365,23 @@ private struct AgentSessionView: View {
     }
 
     private func openChangedFile(_ relativePath: String) {
-        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) { workspace.showChanges() }
+        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
+            workspace.showChanges()
+        }
         changedFileNavigation.begin(path: relativePath, generation: connection.requestChanges(projectId: project.id))
         Task { @MainActor in
             await Task.yield()
             completeChangedFileNavigation(connection.changesCompletion(projectId: project.id))
+        }
+    }
+
+    private func openReportFile(_ relativePath: String) {
+        workspace.prepareFile(TextFileSelection(project: project, relativePath: relativePath))
+        Task { @MainActor in
+            await Task.yield()
+            withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
+                workspace.activatePreparedFile()
+            }
         }
     }
 
@@ -367,6 +390,7 @@ private struct AgentSessionView: View {
             completion: completion,
             response: connection.changes(projectId: project.id)
         ) else { return }
+        workspace.showChanges()
         workspace.prepareDiff(change)
         withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) { workspace.activatePreparedDiff() }
     }
@@ -378,6 +402,7 @@ private struct FeedBlock: View {
     let session: Session
     let project: RemoteProject
     let openChangedFile: (String) -> Void
+    let openReportFile: (String) -> Void
 
     @ViewBuilder var body: some View {
         switch item.content {
@@ -395,9 +420,19 @@ private struct FeedBlock: View {
             case let .fileChanged(value):
                 Button { openChangedFile(value.relativePath) } label: {
                     NoticeBlock(icon: "doc.badge.gearshape", title: value.relativePath, detail: value.change.rawValue.capitalized, color: .orange)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("file-changed-\(value.relativePath)")
+            case let .report(value):
+                ReportBlock(
+                    event: value,
+                    expanded: connection.isReportExpanded(sessionId: session.id, reportId: value.reportId),
+                    toggleExpanded: { expanded in
+                        connection.setReportExpanded(expanded, sessionId: session.id, reportId: value.reportId)
+                    },
+                    openFile: openReportFile
+                )
             case let .turnCompleted(value): NoticeBlock(icon: "checkmark.circle", title: "Turn \(value.outcome.rawValue)", detail: nil, color: outcomeColor(value.outcome.rawValue))
             case let .sessionCompleted(value): NoticeBlock(icon: "checkmark.seal", title: "Session \(value.outcome.rawValue)", detail: nil, color: outcomeColor(value.outcome.rawValue))
             case .sessionStarted: NoticeBlock(icon: "play.circle", title: "Session started", detail: nil, color: .green)
@@ -497,6 +532,7 @@ private struct QuestionBlock: View {
     let historicallyResolved: Bool
     @State private var selected: Set<String> = []
     @State private var freeText = ""
+    @FocusState private var freeTextFocused: Bool
     private var inactive: Bool { historicallyResolved || connection.isResponding(sessionId: session.id, interactionId: event.interactionId) || connection.isSubmitted(sessionId: session.id, interactionId: event.interactionId) || connection.isResolved(sessionId: session.id, interactionId: event.interactionId) }
 
     var body: some View {
@@ -516,8 +552,14 @@ private struct QuestionBlock: View {
                 .disabled(inactive)
                 .accessibilityIdentifier("question-option-\(option.id)")
             }
-            if event.allowFreeText { TextField("Your answer", text: $freeText, axis: .vertical).textFieldStyle(.roundedBorder).disabled(inactive) }
+            if event.allowFreeText {
+                TextField("Your answer", text: $freeText, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($freeTextFocused)
+                    .disabled(inactive)
+            }
             Button("Submit") {
+                freeTextFocused = false
                 connection.respondToQuestion(session: session, interactionId: event.interactionId, optionIds: Array(selected), freeText: freeText)
             }
             .buttonStyle(.borderedProminent)

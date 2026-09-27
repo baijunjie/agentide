@@ -234,6 +234,33 @@ test("session store derives state from atomic events and ignores a truncated JSO
   assert.equal((await restarted.events(session.id)).length, 4);
 });
 
+test("session store preserves report payloads and assigns stable sequences across restart", async (context) => {
+  const base = await mkdtemp(join(tmpdir(), "agentide-store-report-"));
+  context.after(() => rm(base, { recursive: true, force: true }));
+  const path = join(base, "sessions.json");
+  const session = { id: "session-1", projectId: "project-1", agentType: "codex", title: "Task", status: "running", createdAt: "2026-09-24T00:00:00.000Z", updatedAt: "2026-09-24T00:00:00.000Z" };
+  const store = new SessionStore(path);
+  await store.create(session);
+  const stored = await store.record(session.id, event(session.id, "report", {
+    reportVersion: 1,
+    reportId: "tests-1",
+    kind: "test_report",
+    title: "Tests",
+    summary: "One test passed",
+    payload: { total: 1, passed: 1, failed: 0, skipped: 0, failures: [] },
+  }));
+  assert.equal(stored.sequence, 0);
+
+  const restarted = new SessionStore(path);
+  const [report] = await restarted.events(session.id);
+  assert.equal(report.sequence, 0);
+  assert.equal(report.type, "report");
+  assert.deepEqual(report.payload, { total: 1, passed: 1, failed: 0, skipped: 0, failures: [] });
+
+  const next = await restarted.record(session.id, event(session.id, "message", { role: "agent", content: "done", format: "plain" }));
+  assert.equal(next.sequence, 1);
+});
+
 test("session snapshots bound event history and retain each unresolved interaction", async (context) => {
   const base = await mkdtemp(join(tmpdir(), "agentide-session-snapshot-"));
   context.after(() => rm(base, { recursive: true, force: true }));

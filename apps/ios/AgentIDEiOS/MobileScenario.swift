@@ -3,6 +3,9 @@ import AgentIDEProtocol
 
 enum MobileScenario: String, CaseIterable {
     case comprehensive
+    case interactions
+    case reports
+    case reportLayout = "report-layout"
     case offline
     case requestFailure = "request-failure"
     case timeout
@@ -79,12 +82,71 @@ final class MobileScenarioRuntime {
             Self.event(id: "event-0", sessionId: "session-demo", sequence: 0, type: "session.started", extra: ["nativeSessionId": "scenario-native"]),
             Self.event(id: "event-1", sessionId: "session-demo", sequence: 1, type: "message", extra: ["role": "agent", "content": "I inspected the workspace and need approval before continuing.", "format": "markdown"]),
             Self.event(id: "event-2", sessionId: "session-demo", sequence: 2, type: "status", extra: ["status": "waiting_user", "message": "Waiting for simulator input"]),
-            Self.event(id: "event-3", sessionId: "session-demo", sequence: 3, type: "question.requested", extra: ["interactionId": "question-demo", "question": "Which follow-up should run?", "options": [["id": "tests", "label": "Run tests"], ["id": "review", "label": "Review changes"]], "allowFreeText": true]),
-            Self.event(id: "event-4", sessionId: "session-demo", sequence: 4, type: "approval.requested", extra: ["interactionId": "approval-demo", "title": "Run tests", "actions": ["approve_once", "reject"]]),
-            Self.event(id: "event-5", sessionId: "session-demo", sequence: 5, type: "file.changed", extra: ["relativePath": "Sources/App.swift", "change": "modified"])
+            Self.report(
+                id: "event-3", sequence: 3, reportId: "tests-demo", kind: "test_report",
+                title: "Test Report", summary: "42 tests completed with one failure",
+                payload: [
+                    "total": 42, "passed": 40, "failed": 1, "skipped": 1,
+                    "failures": [["name": "WorkspaceTests.testRestore", "message": "Expected restored report state"]],
+                ]
+            ),
+            Self.report(
+                id: "event-4", sequence: 4, reportId: "plan-demo", kind: "plan",
+                title: "Execution Plan", summary: "Implementation is in progress",
+                payload: ["steps": [
+                    ["title": "Define protocol", "status": "completed"],
+                    ["title": "Render reports", "status": "in_progress"],
+                    ["title": "Verify recovery", "status": "pending"],
+                ]]
+            ),
+            Self.report(
+                id: "event-5", sequence: 5, reportId: "todo-demo", kind: "todo",
+                title: "Todo", summary: "One item is blocked",
+                payload: ["items": (0..<55).map { index in
+                    ["title": "Task \(index + 1)", "status": index == 0 ? "blocked" : index < 20 ? "completed" : "not_started"]
+                }]
+            ),
+            Self.report(
+                id: "event-6", sequence: 6, reportId: "diagnostics-demo", kind: "diagnostics",
+                title: "Diagnostics", summary: "One source issue needs attention",
+                payload: ["items": [[
+                    "severity": "error", "message": "Preview state is stale",
+                    "relativePath": "Sources/App.swift", "line": 12, "column": 5,
+                ]]]
+            ),
+            Self.report(
+                id: "event-7", sequence: 7, reportId: "future-demo", kind: "coverage",
+                title: "Coverage", summary: "A newer AgentIDE produced this report",
+                payload: ["percentage": 87.5]
+            ),
+            Self.event(id: "event-8", sessionId: "session-demo", sequence: 8, type: "file.changed", extra: ["relativePath": "Sources/App.swift", "change": "modified"]),
+            Self.event(id: "event-9", sessionId: "session-demo", sequence: 9, type: "question.requested", extra: ["interactionId": "question-demo", "question": "Which follow-up should run?", "options": [["id": "tests", "label": "Run tests"], ["id": "review", "label": "Review changes"]], "allowFreeText": true]),
+            Self.event(id: "event-10", sessionId: "session-demo", sequence: 10, type: "approval.requested", extra: ["interactionId": "approval-demo", "title": "Run tests", "actions": ["approve_once", "reject"]])
         ]
-        events = ["session-demo": initialEvents]
-        pendingInteractions = ["session-demo": [initialEvents[4], initialEvents[3]]]
+        let selectedEvents: [[String: Any]]
+        switch scenario {
+        case .interactions:
+            selectedEvents = initialEvents.filter { ($0["type"] as? String) != "report" }
+        case .reports:
+            selectedEvents = initialEvents.filter { event in
+                let type = event["type"] as? String
+                return type == "session.started" || type == "report"
+            }
+        case .reportLayout:
+            selectedEvents = initialEvents.filter { ($0["id"] as? String) == "event-3" }
+        default:
+            selectedEvents = initialEvents
+        }
+        let scenarioEvents = scenario == .comprehensive ? selectedEvents : selectedEvents.enumerated().map { index, event in
+            var normalized = event
+            normalized["sequence"] = index
+            return normalized
+        }
+        events = ["session-demo": scenarioEvents]
+        pendingInteractions = ["session-demo": scenarioEvents.filter { event in
+            let type = event["type"] as? String
+            return type == "approval.requested" || type == "question.requested"
+        }]
     }
 
     static func fromLaunchArguments(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> MobileScenarioRuntime? {
@@ -412,6 +474,25 @@ final class MobileScenarioRuntime {
         let seconds = sequence % 60
         let timestamp = String(format: "2026-09-27T%02d:%02d:%02d.000Z", hours, minutes, seconds)
         return ["id": id, "sessionId": sessionId, "sequence": sequence, "timestamp": timestamp, "type": type].merging(extra) { _, new in new }
+    }
+
+    private static func report(
+        id: String,
+        sequence: Int,
+        reportId: String,
+        kind: String,
+        title: String,
+        summary: String,
+        payload: [String: Any]
+    ) -> [String: Any] {
+        event(id: id, sessionId: "session-demo", sequence: sequence, type: "report", extra: [
+            "reportVersion": 1,
+            "reportId": reportId,
+            "kind": kind,
+            "title": title,
+            "summary": summary,
+            "payload": payload,
+        ])
     }
 
     private func encode(_ object: [String: Any]) -> Data {

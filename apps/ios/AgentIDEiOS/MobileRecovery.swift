@@ -10,6 +10,7 @@ struct MobileRecoveryCache: Codable {
     var workspaceNavigations: [String: WorkspaceNavigationState]?
     var fileBrowserNavigations: [String: FileBrowserRecoveryState]?
     var sessionDrafts: [String: String]? = nil
+    var expandedReportIds: [String: [String]]? = nil
     var submittedInteractions: [String]?
     var resolvedInteractions: [String]?
 
@@ -64,6 +65,13 @@ struct MobileRecoveryCache: Codable {
         cache.pendingInteractions = cache.pendingInteractions?.filter { retainedSessionIds.contains($0.key) }
         cache.workspaceNavigations = cache.workspaceNavigations?.filter { retainedSessionIds.contains($0.key) }
         cache.sessionDrafts = cache.sessionDrafts?.filter { retainedSessionIds.contains($0.key) && !$0.value.isEmpty }
+        cache.expandedReportIds = cache.expandedReportIds?.reduce(into: [:]) { result, item in
+            guard retainedSessionIds.contains(item.key) else { return }
+            var seen = Set<String>()
+            let retained = item.value.reversed().filter { !$0.isEmpty && seen.insert($0).inserted }
+                .prefix(MobileRecoveryLimits.expandedReportsPerSession).reversed()
+            if !retained.isEmpty { result[item.key] = Array(retained) }
+        }
         cache.fileBrowserNavigations = cache.fileBrowserNavigations?.reduce(into: [:]) { result, item in
             guard retainedProjectIds.contains(item.key) else { return }
             result[item.key] = item.value.trimmed()
@@ -76,6 +84,10 @@ struct MobileRecoveryCache: Codable {
         }.sorted().prefix(MobileRecoveryLimits.interactionCount).map { $0 }
 
         while let data = try? JSONEncoder().encode(cache), data.count > MobileRecoveryLimits.persistenceByteBudget {
+            if let sessionId = cache.expandedReportIds?.keys.sorted().last {
+                cache.expandedReportIds?.removeValue(forKey: sessionId)
+                continue
+            }
             if let sessionId = cache.orderedSessionIds(activeSessionId: activeSessionId).reversed().first(where: {
                 !(cache.sessionEvents[$0] ?? []).isEmpty
             }) {
@@ -132,6 +144,7 @@ struct MobileRecoveryCache: Codable {
         }
         let ids = Set(sessionsById.keys).union(sessionProjects.keys).union(sessionEvents.keys)
             .union(sessionDrafts?.keys.map { $0 } ?? [])
+            .union(expandedReportIds?.keys.map { $0 } ?? [])
         let ordered = ids.sorted { lhs, rhs in
             let lhsUpdatedAt = sessionsById[lhs]?.updatedAt ?? ""
             let rhsUpdatedAt = sessionsById[rhs]?.updatedAt ?? ""
@@ -148,6 +161,7 @@ struct MobileRecoveryCache: Codable {
         pendingInteractions?.removeValue(forKey: sessionId)
         workspaceNavigations?.removeValue(forKey: sessionId)
         sessionDrafts?.removeValue(forKey: sessionId)
+        expandedReportIds?.removeValue(forKey: sessionId)
         for projectId in Array(sessions.keys) {
             sessions[projectId]?.removeAll { $0.id == sessionId }
             if sessions[projectId]?.isEmpty == true { sessions.removeValue(forKey: projectId) }
@@ -163,6 +177,7 @@ enum MobileRecoveryLimits {
     static let sessionsPerProject = 20
     static let eventsPerSession = 200
     static let interactionCount = 100
+    static let expandedReportsPerSession = 50
     static let expandedPathsPerProject = 100
     static let maximumEventBytes = 16 * 1024
     static let persistenceByteBudget = 512 * 1024

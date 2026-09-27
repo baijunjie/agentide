@@ -1582,12 +1582,14 @@ full text search
 
 ## P2 — Rich Report Blocks
 
+当前支持的类型：
+
 - Test Report
 - Plan
 - Todo
-- Diff
-- Table
 - Diagnostics
+
+完整契约见 `docs/product/protocol.md`「结构化报告」节。Diff 与 Table 是尚未实现的未来候选，不属于当前协议的已知报告类型。
 
 ## P3 — More Agents
 

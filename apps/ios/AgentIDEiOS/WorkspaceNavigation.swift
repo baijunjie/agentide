@@ -1,5 +1,6 @@
 import AgentIDEProtocol
 import SwiftUI
+import UIKit
 
 enum WorkspaceLevel: Codable, Equatable {
     case session
@@ -80,12 +81,13 @@ struct WorkspaceNavigationState: Codable, Equatable {
 
 struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, FileContent: View, ChangesContent: View, DiffContent: View>: View {
     @Binding var navigation: WorkspaceNavigationState
-    @ViewBuilder let sessionContent: () -> SessionContent
+    @ViewBuilder let sessionContent: (CGFloat) -> SessionContent
     @ViewBuilder let browserContent: () -> BrowserContent
     @ViewBuilder let fileContent: (TextFileSelection) -> FileContent
     @ViewBuilder let changesContent: () -> ChangesContent
     @ViewBuilder let diffContent: (GitChange) -> DiffContent
     @State private var dragTranslation: CGFloat = 0
+    @State private var navigationInset: CGFloat = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -94,7 +96,7 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
             let inactiveInset = inactiveLayerWidth(width)
 
             ZStack(alignment: .leading) {
-                sessionContent()
+                sessionContent(navigationInset)
                     .workspaceLayer(sessionStyle(depth: depth, width: width))
                     .allowsHitTesting(navigation.level == .session)
                     .accessibilityHidden(navigation.level != .session)
@@ -137,6 +139,10 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
                 // The file layer owns horizontal scrolling. Keep descendant gestures active while excluding this container gesture.
                 including: navigation.level.depth == 2 ? .subviews : .all
             )
+            .background {
+                NavigationClearanceReader(clearance: $navigationInset)
+                    .allowsHitTesting(false)
+            }
         }
     }
 
@@ -306,6 +312,93 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
 
     private func inactiveLayerWidth(_ width: CGFloat) -> CGFloat {
         min(width * 0.25, 108)
+    }
+}
+
+private struct NavigationClearanceReader: UIViewRepresentable {
+    @Binding var clearance: CGFloat
+
+    func makeUIView(context: Context) -> NavigationClearanceView {
+        NavigationClearanceView()
+    }
+
+    func updateUIView(_ view: NavigationClearanceView, context: Context) {
+        view.onChange = { value in
+            if abs(clearance - value) > 0.5 { clearance = value }
+        }
+        view.measureClearance()
+    }
+}
+
+private final class NavigationClearanceView: UIView {
+    var onChange: ((CGFloat) -> Void)?
+    private var lastValue: CGFloat = -1
+    private var retryCount = 0
+    private var retryScheduled = false
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        measureClearance()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        retryCount = 0
+        measureClearance()
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        measureClearance()
+    }
+
+    func measureClearance() {
+        guard let window,
+              let navigationBar = (enclosingNavigationController() ?? navigationController(in: window.rootViewController))?.navigationBar else {
+            scheduleRetry()
+            return
+        }
+        // GeometryReader lays the workspace out from the window origin, beneath NavigationStack chrome.
+        let value = max(0, navigationBar.convert(navigationBar.bounds, to: window).maxY)
+        if abs(lastValue - value) > 0.5 {
+            lastValue = value
+            DispatchQueue.main.async { [weak self] in self?.onChange?(value) }
+        }
+        scheduleRetry()
+    }
+
+    private func scheduleRetry() {
+        guard window != nil, retryCount < 20, !retryScheduled else { return }
+        retryCount += 1
+        retryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            retryScheduled = false
+            measureClearance()
+        }
+    }
+
+    private func enclosingNavigationController() -> UINavigationController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let navigationController = current as? UINavigationController { return navigationController }
+            if let controller = current as? UIViewController,
+               let navigationController = controller.navigationController {
+                return navigationController
+            }
+            responder = current.next
+        }
+        return nil
+    }
+
+    private func navigationController(in controller: UIViewController?) -> UINavigationController? {
+        guard let controller else { return nil }
+        if let navigationController = controller as? UINavigationController { return navigationController }
+        if let presented = navigationController(in: controller.presentedViewController) { return presented }
+        for child in controller.children {
+            if let navigationController = navigationController(in: child) { return navigationController }
+        }
+        return nil
     }
 }
 

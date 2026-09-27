@@ -34,6 +34,13 @@ class FakeConnection {
   fail(error) { for (const listener of this.errors) listener(error); }
 }
 
+const reports = [
+  { reportVersion: 1, reportId: "test", kind: "test_report", title: "Tests", summary: "All tests passed", payload: { total: 1, passed: 1, failed: 0, skipped: 0, failures: [] } },
+  { reportVersion: 1, reportId: "plan", kind: "plan", title: "Plan", summary: "One step", payload: { steps: [{ title: "Implement", status: "pending" }] } },
+  { reportVersion: 1, reportId: "todo", kind: "todo", title: "Todo", summary: "One item", payload: { items: [{ title: "Review", status: "not_started" }] } },
+  { reportVersion: 1, reportId: "diagnostics", kind: "diagnostics", title: "Diagnostics", summary: "One warning", payload: { items: [{ severity: "warning", message: "Check this", relativePath: "src/app.ts", line: 1, column: 1 }] } },
+];
+
 test("Codex adapter drives app-server and normalizes a turn with approval", async () => {
   const connection = new FakeConnection();
   let nextId = 0;
@@ -49,16 +56,15 @@ test("Codex adapter drives app-server and normalizes a turn with approval", asyn
   });
   assert.equal(session.nativeSessionId, "thread-1");
   assert.deepEqual(adapter.capabilities(), { approvals: true, questions: false, resumeSession: true });
-  assert.deepEqual(connection.requests[0], {
-    method: "thread/start",
-    params: {
-      cwd: "/project",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      serviceName: "agentide",
-      threadSource: "appServer",
-    },
-  });
+  const reportTool = connection.requests[0].params.dynamicTools[0].tools[0];
+  assert.equal(connection.requests[0].params.cwd, "/project");
+  assert.equal(reportTool.name, "report");
+  assert.equal(reportTool.inputSchema.oneOf.length, 4);
+  assert.deepEqual(
+    reportTool.inputSchema.oneOf.map((variant) => variant.properties.kind.const),
+    ["test_report", "plan", "todo", "diagnostics"],
+  );
+  assert.equal(reportTool.inputSchema.oneOf.every((variant) => variant.additionalProperties === false), true);
 
   const events = adapter.events(session.id)[Symbol.asyncIterator]();
   assert.equal((await events.next()).value.type, "session.started");
@@ -97,6 +103,100 @@ test("Codex adapter resumes a native thread and interrupts its active turn", asy
   await adapter.cancel(session.id);
   assert.deepEqual(connection.requests.map((request) => request.method), ["thread/resume", "turn/start", "turn/interrupt"]);
   assert.deepEqual(connection.requests.at(-1).params, { threadId: "thread-existing", turnId: "turn-1" });
+});
+
+test("Codex adapter records report tool calls and rejects invalid or unknown calls", async () => {
+  const connection = new FakeConnection();
+  const adapter = new CodexAdapter({ connection });
+  const session = await adapter.createSession({ sessionId: "session-1", projectId: "project-1", workingDirectory: "/project" });
+  const events = adapter.events(session.id)[Symbol.asyncIterator]();
+  await events.next();
+  for (const [index, report] of reports.entries()) {
+    connection.requestClient("item/tool/call", index, {
+      threadId: "thread-1",
+      namespace: "agentide",
+      tool: "report",
+      arguments: report,
+    });
+    const event = (await events.next()).value;
+    assert.equal(event.type, "report");
+    assert.equal(event.kind, report.kind);
+    assert.deepEqual(connection.responses.at(-1), {
+      id: index,
+      result: { success: true, contentItems: [{ type: "inputText", text: "Report published." }] },
+    });
+  }
+  connection.requestClient("item/tool/call", 10, {
+    threadId: "thread-1",
+    namespace: "agentide",
+    tool: "report",
+    arguments: { ...reports[0], payload: { total: 1, passed: 0, failed: 0, skipped: 0, failures: [] } },
+  });
+  connection.requestClient("item/tool/call", 11, {
+    threadId: "thread-1",
+    namespace: "agentide",
+    tool: "unknown",
+    arguments: reports[0],
+  });
+  connection.requestClient("item/tool/call", 12, {
+    threadId: "old-thread",
+    namespace: "agentide",
+    tool: "report",
+    arguments: reports[0],
+  });
+  connection.requestClient("item/tool/call", 13, {
+    threadId: "thread-1",
+    namespace: "agentide",
+    tool: "report",
+    arguments: { ...reports[0], kind: "unknown" },
+  });
+  connection.requestClient("item/tool/call", 14, {
+    threadId: "thread-1",
+    namespace: "agentide",
+    tool: "report",
+    arguments: { ...reports[0], type: "session.completed" },
+  });
+  connection.requestClient("item/tool/call", 15, {
+    threadId: "thread-1",
+    namespace: "agentide",
+    tool: "report",
+    arguments: { ...reports[0], unexpected: true },
+  });
+  connection.requestClient("item/tool/call", 16, {
+    threadId: "thread-1",
+    namespace: "agentide",
+    tool: "report",
+    arguments: { ...reports[0], kind: "todo", payload: { steps: [] } },
+  });
+  for (const id of [10, 11, 12, 13, 14, 15, 16]) {
+    assert.equal(connection.responses.find((response) => response.id === id).result.success, false);
+  }
+  await adapter.close();
+});
+
+test("Codex adapter rejects every malformed report tool call without throwing", async () => {
+  const connection = new FakeConnection();
+  const adapter = new CodexAdapter({ connection });
+  await adapter.createSession({ sessionId: "session-1", projectId: "project-1", workingDirectory: "/project" });
+
+  for (const [index, params] of [
+    null,
+    [],
+    "invalid",
+    { threadId: "thread-1", namespace: "agentide", tool: "report", arguments: null },
+    { threadId: "thread-1", namespace: "agentide", tool: "report", arguments: [] },
+    { threadId: "thread-1", namespace: "agentide", tool: "report", arguments: "invalid" },
+  ].entries()) {
+    connection.requestClient("item/tool/call", 100 + index, params);
+  }
+
+  for (let id = 100; id < 106; id += 1) {
+    assert.deepEqual(connection.responses.find((response) => response.id === id), {
+      id,
+      result: { success: false, contentItems: [{ type: "inputText", text: id < 103 ? "Unknown or invalid AgentIDE tool call." : "Report input is invalid." }] },
+    });
+  }
+  await adapter.close();
 });
 
 test("Codex adapter honors approval choices and ignores unapplied file changes", async () => {

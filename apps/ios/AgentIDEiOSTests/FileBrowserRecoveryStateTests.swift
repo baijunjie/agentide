@@ -305,6 +305,49 @@ final class FileBrowserRecoveryStateTests: XCTestCase {
         XCTAssertNil(cache.sessionDrafts?[activeSessionId])
     }
 
+    func testExpandedReportsRoundTripStayBoundedAndFollowSessionCleanup() throws {
+        let sessionId = "session-reports"
+        var cache = MobileRecoveryCache(
+            projects: [RemoteProject(id: "project-one", name: "One", createdAt: "2026-09-27T00:00:00Z", enabledAgents: [.codex], online: true)],
+            sessions: ["project-one": [session(id: sessionId, projectId: "project-one")]],
+            sessionEvents: [:],
+            sessionProjects: [sessionId: "project-one"],
+            workspaceNavigations: nil,
+            fileBrowserNavigations: nil,
+            expandedReportIds: [sessionId: (0...MobileRecoveryLimits.expandedReportsPerSession).map { "report-\($0)" }],
+            submittedInteractions: [],
+            resolvedInteractions: []
+        ).trimmedForPersistence(activeSessionId: sessionId)
+
+        let restored = try JSONDecoder().decode(MobileRecoveryCache.self, from: JSONEncoder().encode(cache))
+        XCTAssertEqual(restored.expandedReportIds?[sessionId]?.count, MobileRecoveryLimits.expandedReportsPerSession)
+        XCTAssertEqual(restored.expandedReportIds?[sessionId]?.last, "report-\(MobileRecoveryLimits.expandedReportsPerSession)")
+
+        cache.removeSession(sessionId)
+        XCTAssertNil(cache.expandedReportIds?[sessionId])
+    }
+
+    func testExpandedReportStateIsEvictedBeforeReportEvents() throws {
+        let sessionId = "session-reports"
+        let oversizedExpandedState = (0..<MobileRecoveryLimits.expandedReportsPerSession).map {
+            "report-\($0)-\(String(repeating: "x", count: 12_000))"
+        }
+        let cache = MobileRecoveryCache(
+            projects: [RemoteProject(id: "project-one", name: "One", createdAt: "2026-09-27T00:00:00Z", enabledAgents: [.codex], online: true)],
+            sessions: ["project-one": [session(id: sessionId, projectId: "project-one")]],
+            sessionEvents: [sessionId: [report(sessionId: sessionId, sequence: 1)]],
+            sessionProjects: [sessionId: "project-one"],
+            workspaceNavigations: nil,
+            fileBrowserNavigations: nil,
+            expandedReportIds: [sessionId: oversizedExpandedState],
+            submittedInteractions: [],
+            resolvedInteractions: []
+        ).trimmedForPersistence(activeSessionId: sessionId)
+
+        XCTAssertNil(cache.expandedReportIds?[sessionId])
+        XCTAssertEqual(cache.sessionEvents[sessionId]?.count, 1)
+    }
+
     @MainActor
     func testDraftsRoundTripAndFollowPerProjectSessionCountEviction() throws {
         let projectId = "project-many"
@@ -389,6 +432,12 @@ final class FileBrowserRecoveryStateTests: XCTestCase {
             "content": content,
             "format": "plain",
         ]))
+    }
+
+    private func report(sessionId: String, sequence: Int) -> AgentEvent {
+        try! JSONDecoder().decode(AgentEvent.self, from: Data("""
+        {"id":"\(sessionId)-report-\(sequence)","sessionId":"\(sessionId)","sequence":\(sequence),"timestamp":"2026-09-27T00:00:00Z","type":"report","reportVersion":1,"reportId":"report-\(sequence)","kind":"plan","title":"Plan","summary":"Summary","payload":{"steps":[{"title":"Persist report","status":"completed"}]}}
+        """.utf8))
     }
 
     private func completed(sessionId: String) -> AgentEvent {

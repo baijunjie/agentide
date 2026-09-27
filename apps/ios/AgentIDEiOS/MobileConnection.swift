@@ -179,6 +179,7 @@ final class MobileConnection: ObservableObject {
     @Published var resolvedInteractions: Set<String> = []
     @Published var sessionErrors: [String: String] = [:]
     @Published private(set) var sessionDrafts: [String: String]
+    @Published private(set) var expandedReportIds: [String: [String]]
     @Published private(set) var recoveryErrors: [String: String] = [:]
     @Published var createdSession: Session?
     @Published private var imageRevision = 0
@@ -253,6 +254,7 @@ final class MobileConnection: ObservableObject {
         fileBrowserNavigations = recoveryCache?.fileBrowserNavigations ?? [:]
         let restoredDrafts = recoveryCache?.sessionDrafts ?? [:]
         sessionDrafts = restoredDrafts
+        expandedReportIds = recoveryCache?.expandedReportIds ?? [:]
         draftRevisions = Dictionary(uniqueKeysWithValues: restoredDrafts.keys.map { ($0, 0) })
         submittedInteractions = Set(recoveryCache?.submittedInteractions
             ?? (scenarioRuntime == nil ? UserDefaults.standard.stringArray(forKey: "submittedInteractions") : nil) ?? [])
@@ -368,6 +370,20 @@ final class MobileConnection: ObservableObject {
     func appendToDraft(_ text: String, for sessionId: String) {
         let current = draft(for: sessionId)
         updateDraft(current.isEmpty ? text : "\(current)\n\(text)", for: sessionId)
+    }
+
+    func isReportExpanded(sessionId: String, reportId: String) -> Bool {
+        expandedReportIds[sessionId]?.contains(reportId) == true
+    }
+
+    func setReportExpanded(_ expanded: Bool, sessionId: String, reportId: String) {
+        var ids = expandedReportIds[sessionId] ?? []
+        ids.removeAll { $0 == reportId }
+        if expanded { ids.append(reportId) }
+        ids = Array(ids.suffix(MobileRecoveryLimits.expandedReportsPerSession))
+        if ids.isEmpty { expandedReportIds.removeValue(forKey: sessionId) }
+        else { expandedReportIds[sessionId] = ids }
+        scheduleRecoveryPersistence()
     }
 
     func fileBrowserNavigation(for projectId: String) -> FileBrowserRecoveryState {
@@ -1187,6 +1203,11 @@ final class MobileConnection: ObservableObject {
         subscribingSessions.formIntersection(retainedSessionIds)
         workspaceNavigations = workspaceNavigations.filter { retainedSessionIds.contains($0.key) }
         sessionDrafts = sessionDrafts.filter { retainedSessionIds.contains($0.key) && !$0.value.isEmpty }
+        expandedReportIds = expandedReportIds.reduce(into: [:]) { result, item in
+            guard retainedSessionIds.contains(item.key) else { return }
+            let retained = Array(item.value.suffix(MobileRecoveryLimits.expandedReportsPerSession))
+            if !retained.isEmpty { result[item.key] = retained }
+        }
         fileBrowserNavigations = fileBrowserNavigations.reduce(into: [:]) { result, item in
             guard retainedProjectIds.contains(item.key) else { return }
             result[item.key] = item.value.trimmed()
@@ -1255,6 +1276,7 @@ final class MobileConnection: ObservableObject {
             workspaceNavigations: workspaceNavigations,
             fileBrowserNavigations: fileBrowserNavigations,
             sessionDrafts: sessionDrafts,
+            expandedReportIds: expandedReportIds,
             submittedInteractions: submittedInteractions.sorted(),
             resolvedInteractions: resolvedInteractions.sorted()
         )
@@ -1267,6 +1289,10 @@ final class MobileConnection: ObservableObject {
     private func trimRecoveryBytes() {
         while let data = rawEncodedRecoveryCache(), data.count > MobileRecoveryLimits.persistenceByteBudget {
             let protectedSessionIds = Set(pendingInteractionEvents.compactMap { $0.value.isEmpty ? nil : $0.key })
+            if let sessionId = expandedReportIds.keys.sorted().last {
+                expandedReportIds.removeValue(forKey: sessionId)
+                continue
+            }
             if let sessionId = orderedSessionIds().reversed().first(where: { !(sessionEvents[$0] ?? []).isEmpty }) {
                 sessionEvents[sessionId]?.removeFirst()
                 sessionFeedItems[sessionId] = feedItems(allSessionEvents(sessionId))
@@ -1327,6 +1353,7 @@ final class MobileConnection: ObservableObject {
         pendingEventInteractions.removeValue(forKey: sessionId)
         workspaceNavigations.removeValue(forKey: sessionId)
         sessionDrafts.removeValue(forKey: sessionId)
+        expandedReportIds.removeValue(forKey: sessionId)
         draftRevisions.removeValue(forKey: sessionId)
         submittedDrafts.removeValue(forKey: sessionId)
         snapshottingSessions.remove(sessionId)

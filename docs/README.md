@@ -3,8 +3,8 @@
 ## 索引
 
 - [项目地图](project-map.md)：应用、共享包、入口文件与基础设施的职责导航。
-- [三端通信与 Agent 契约](product/protocol.md)：Envelope、统一 Agent 事件、适配器和共享业务对象的现行契约。
-- [Agent 会话执行与事件投递](product/agent-sessions.md)：会话生命周期、Claude/Codex 执行、Agent Host 持久化、iPhone 会话交互与可靠重放规则。
+- [三端通信与 Agent 契约](product/protocol.md)：Envelope、统一 Agent 事件、结构化报告、适配器和共享业务对象的现行契约。
+- [Agent 会话执行与事件投递](product/agent-sessions.md)：会话生命周期、Claude/Codex 执行与报告工具、Agent Host 持久化、iPhone 会话交互与可靠重放规则。
 - [设备配对与 Relay 连接](product/device-pairing.md)：Mac 与 iPhone 的设备身份、配对、鉴权、在线状态、路由、撤销和重连规则。
 - [项目登记与文件浏览](product/project-files.md)：Mac 项目登记、远程项目元数据、iPhone 文件树与项目文件搜索、只读文件查看交互，以及项目根目录沙箱规则。
 - [Git 变更与统一 Diff 审查](product/git-changes.md)：iPhone 的 Changes 列表、Diff Viewer、`file.changed` 深链以及 Agent Host 只读 Git 查询边界。

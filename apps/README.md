@@ -10,7 +10,7 @@
 
 ## iOS 客户端
 
-`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并提供 Projects → Session List → Agent Session 主流程；会话界面负责创建 Claude/Codex 会话、呈现统一 Activity Feed、发送与取消轮次、回应审批和问题，并从会话工作流进入带搜索能力的项目文件浏览或 Git Changes/Diff 审查。它还解码、排序并确认 Agent 事件，在连接恢复时续订未结束的事件流。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)，Git 审查行为见 [Git 变更与统一 Diff 审查](../docs/product/git-changes.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
+`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并提供 Projects → Session List → Agent Session 主流程；会话界面负责创建 Claude/Codex 会话、呈现统一 Activity Feed 和结构化报告、发送与取消轮次、回应审批和问题，并从会话工作流进入带搜索能力的项目文件浏览、诊断定位或 Git Changes/Diff 审查。它还解码、排序并确认 Agent 事件，在连接恢复时续订未结束的事件流。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)，Git 审查行为见 [Git 变更与统一 Diff 审查](../docs/product/git-changes.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外入口：
 
@@ -23,7 +23,9 @@ DEBUG 构建可用启动参数 `-mobileScenario <场景名>` 或 `--mobile-scena
 
 | 场景名 | 行为 |
 | --- | --- |
-| `comprehensive` | 提供项目、会话、会话创建、消息发送与取消、审批、提问、文件浏览与搜索、文本和图片查看的完整闭环。 |
+| `comprehensive` | 提供项目、会话、会话创建、消息发送与取消、审批、提问、结构化报告、文件浏览与搜索、文本和图片查看的完整闭环。 |
+| `interactions` | 只保留审批、提问和普通活动事件的确定性会话，供交互闭环测试使用。 |
+| `reports` | 提供四种首版结构化报告和一个未知类型报告，供渲染、详情截断与诊断文件跳转测试使用。 |
 | `offline` | 以已配对但 Mac 离线的状态启动，不提供远端项目。 |
 | `request-failure` | 为请求返回带 `replyTo` 的确定性失败响应。 |
 | `timeout` | 不返回请求响应，用于验证正式超时处理。 |

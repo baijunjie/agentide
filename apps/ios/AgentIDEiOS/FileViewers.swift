@@ -52,6 +52,13 @@ struct TextFileSelection: Codable, Hashable {
         relativePath = entry.relativePath
         isMarkdown = entry.extension?.lowercased() == "md"
     }
+
+    init(project: RemoteProject, relativePath: String) {
+        projectId = project.id
+        name = relativePath.split(separator: "/").last.map(String.init) ?? relativePath
+        self.relativePath = relativePath
+        isMarkdown = relativePath.split(separator: ".").last?.lowercased() == "md"
+    }
 }
 
 struct ImageFileSelection: Codable, Identifiable, Equatable {

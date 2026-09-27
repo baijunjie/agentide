@@ -1,0 +1,6 @@
+[
+  { "id": "bad-sum", "sessionId": "s1", "sequence": 1, "timestamp": "2026-09-22T00:00:00.000Z", "type": "report", "reportVersion": 1, "reportId": "r1", "kind": "test_report", "title": "Tests", "summary": "Bad sum", "payload": { "total": 2, "passed": 2, "failed": 1, "skipped": 0, "failures": [] } },
+  { "id": "bad-overflow", "sessionId": "s1", "sequence": 2, "timestamp": "2026-09-22T00:00:00.000Z", "type": "report", "reportVersion": 1, "reportId": "r2", "kind": "test_report", "title": "Tests", "summary": "Overflow", "payload": { "total": 9223372036854775807, "passed": 9223372036854775807, "failed": 1, "skipped": 0, "failures": [] } },
+  { "id": "bad-report-version", "sessionId": "s1", "sequence": 3, "timestamp": "2026-09-22T00:00:00.000Z", "type": "report", "reportVersion": 9007199254740992, "reportId": "r3", "kind": "future", "title": "Future", "summary": "Unsafe version", "payload": {} },
+  { "id": "bad-line", "sessionId": "s1", "sequence": 4, "timestamp": "2026-09-22T00:00:00.000Z", "type": "report", "reportVersion": 1, "reportId": "r4", "kind": "diagnostics", "title": "Diagnostics", "summary": "Unsafe line", "payload": { "items": [{ "severity": "error", "message": "Bad", "line": 9007199254740992 }] } }
+]

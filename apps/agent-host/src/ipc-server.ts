@@ -60,10 +60,14 @@ async function route(
     sendJSON(response, 200, await sessions.get(decodeURIComponent(sessionMatch[1] ?? "")));
     return;
   }
-  const sessionOperationMatch = /^\/sessions\/([^/]+)\/(events|messages|cancel|interactions)$/.exec(url.pathname);
+  const sessionOperationMatch = /^\/sessions\/([^/]+)\/(events|messages|cancel|interactions|snapshot)$/.exec(url.pathname);
   if (sessionOperationMatch !== null) {
     const sessionId = decodeURIComponent(sessionOperationMatch[1] ?? "");
     const operation = sessionOperationMatch[2];
+    if (operation === "snapshot" && request.method === "GET") {
+      sendJSON(response, 200, await sessions.snapshot(sessionId));
+      return;
+    }
     if (operation === "events" && request.method === "GET") {
       const afterValue = url.searchParams.get("afterSequence");
       const afterSequence = afterValue === null ? undefined : Number(afterValue);

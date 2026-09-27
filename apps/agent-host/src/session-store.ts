@@ -6,6 +6,18 @@ import type { Session } from "@agentide/shared-types";
 interface StoredSessions {
   sessions: Session[];
   events: Record<string, AgentEvent[]>;
+  resolvedInteractions: Record<string, ResolvedInteraction[]>;
+}
+
+interface ResolvedInteraction {
+  interactionId: string;
+  sequence: number;
+}
+
+export interface StoredSessionSnapshot {
+  session: Session;
+  events: AgentEvent[];
+  resolvedInteractionSequences: ReadonlyMap<string, ReadonlySet<number>>;
 }
 
 export class SessionStore {
@@ -33,11 +45,47 @@ export class SessionStore {
     return (this.data?.events[sessionId] ?? []).slice(Math.max(0, afterSequence + 1)).map((event) => ({ ...event }));
   }
 
+  async snapshot(sessionId: string): Promise<StoredSessionSnapshot | undefined> {
+    await this.mutations;
+    await this.load();
+    const session = this.data?.sessions.find((value) => value.id === sessionId);
+    if (session === undefined) return undefined;
+    return {
+      session: { ...session },
+      events: (this.data?.events[sessionId] ?? []).map((event) => ({ ...event })),
+      resolvedInteractionSequences: resolvedInteractionSequences(this.data?.resolvedInteractions[sessionId] ?? []),
+    };
+  }
+
   async create(session: Session): Promise<void> {
     await this.mutate(async (data) => {
       if (data.sessions.some((value) => value.id === session.id)) throw new Error("Session already exists");
       data.sessions.push({ ...session });
       data.events[session.id] = [];
+      data.resolvedInteractions[session.id] = [];
+    });
+  }
+
+  async resolveInteraction(sessionId: string, interactionId: string): Promise<void> {
+    await this.resolveInteractions(sessionId, [interactionId]);
+  }
+
+  async resolveInteractions(sessionId: string, interactionIds: Iterable<string>): Promise<void> {
+    await this.mutate(async (data) => {
+      if (!data.sessions.some((session) => session.id === sessionId)) throw new Error("Session not found");
+      const resolved = resolvedInteractionSequences(data.resolvedInteractions[sessionId] ?? []);
+      const events = data.events[sessionId] ?? [];
+      for (const interactionId of interactionIds) {
+        const request = latestInteractionRequest(events, interactionId);
+        if (request !== undefined) {
+          const sequences = resolved.get(interactionId) ?? new Set<number>();
+          sequences.add(request.sequence);
+          resolved.set(interactionId, sequences);
+        }
+      }
+      data.resolvedInteractions[sessionId] = [...resolved].flatMap(([interactionId, sequences]) =>
+        [...sequences].map((sequence) => ({ interactionId, sequence })),
+      );
     });
   }
 
@@ -53,6 +101,7 @@ export class SessionStore {
       const events = data.events[sessionId] ?? [];
       stored = { ...event, sessionId, sequence: (events.at(-1)?.sequence ?? -1) + 1 };
       const nextSession = { ...session, updatedAt: stored.timestamp };
+      const resolvedInteractions = { ...data.resolvedInteractions };
       if (stored.type === "status") nextSession.status = stored.status;
       else if (stored.type === "approval.requested" || stored.type === "question.requested") nextSession.status = "waiting_user";
       else if (stored.type === "turn.completed") nextSession.status = "idle";
@@ -61,7 +110,7 @@ export class SessionStore {
       sessions[sessionIndex] = nextSession;
       try {
         await this.appendEvent(sessionId, stored);
-        if (changesSessionStatus(stored)) await this.save(sessions);
+        if (changesSessionStatus(stored)) await this.save({ sessions, resolvedInteractions });
       } catch (error) {
         this.data = undefined;
         this.loading = undefined;
@@ -70,6 +119,7 @@ export class SessionStore {
       events.push(stored);
       data.events[sessionId] = events;
       data.sessions = sessions;
+      data.resolvedInteractions = resolvedInteractions;
       for (const notify of this.eventWaiters.get(sessionId) ?? []) notify(stored);
     });
     this.mutations = result.then(() => undefined, () => undefined);
@@ -114,11 +164,17 @@ export class SessionStore {
   private async loadOnce(): Promise<void> {
     try {
       const value: unknown = JSON.parse(await readFile(this.filePath, "utf8"));
-      if (!isRecord(value) || !Array.isArray(value.sessions) || (value.events !== undefined && !isRecord(value.events))) {
+      if (!isRecord(value) || !Array.isArray(value.sessions) || (value.events !== undefined && !isRecord(value.events)) || (value.resolvedInteractions !== undefined && !isRecord(value.resolvedInteractions))) {
         throw new Error("Session store has an invalid shape");
       }
       const sessions = value.sessions as Session[];
       const legacy = isRecord(value.events) ? value.events as Record<string, AgentEvent[]> : {};
+      const resolvedInteractions = isRecord(value.resolvedInteractions)
+        ? Object.fromEntries(Object.entries(value.resolvedInteractions).map(([sessionId, interactions]) => [
+          sessionId,
+          parseResolvedInteractions(interactions),
+        ])) as Record<string, ResolvedInteraction[]>
+        : {};
       const eventEntries = await Promise.all(sessions.map(async (session) => {
         let persisted: AgentEvent[] = [];
         try {
@@ -135,10 +191,11 @@ export class SessionStore {
       this.data = {
         sessions: sessions.map((session) => deriveSession(session, events[session.id] ?? [])),
         events,
+        resolvedInteractions,
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      this.data = { sessions: [], events: {} };
+      this.data = { sessions: [], events: {}, resolvedInteractions: {} };
     }
   }
 
@@ -149,7 +206,7 @@ export class SessionStore {
       if (current === undefined) throw new Error("Session store failed to load");
       const next = structuredClone(current);
       await operation(next);
-      await this.save(next.sessions);
+      await this.save(next);
       this.data = next;
     });
     this.mutations = result.then(() => undefined, () => undefined);
@@ -166,16 +223,59 @@ export class SessionStore {
     return join(`${this.filePath}.events`, `${encodeURIComponent(sessionId)}.jsonl`);
   }
 
-  private async save(sessions: Session[]): Promise<void> {
+  private async save(data: Pick<StoredSessions, "sessions" | "resolvedInteractions">): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true });
     const temporaryPath = `${this.filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify({ sessions }, undefined, 2)}\n`, { mode: 0o600 });
+    await writeFile(temporaryPath, `${JSON.stringify(data, undefined, 2)}\n`, { mode: 0o600 });
     await rename(temporaryPath, this.filePath);
   }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseResolvedInteractions(value: unknown): ResolvedInteraction[] {
+  if (!Array.isArray(value)) throw new Error("Session store has invalid resolved interactions");
+  if (value.every((interaction) => typeof interaction === "string")) return [];
+  if (!value.every((interaction) =>
+    isRecord(interaction) &&
+    typeof interaction.interactionId === "string" &&
+    typeof interaction.sequence === "number" &&
+    Number.isInteger(interaction.sequence) &&
+    interaction.sequence >= 0,
+  )) {
+    throw new Error("Session store has invalid resolved interactions");
+  }
+  return (value as Record<string, unknown>[]).map((interaction) => ({
+    interactionId: interaction.interactionId as string,
+    sequence: interaction.sequence as number,
+  }));
+}
+
+function resolvedInteractionSequences(interactions: readonly ResolvedInteraction[]): Map<string, Set<number>> {
+  const sequences = new Map<string, Set<number>>();
+  for (const interaction of interactions) {
+    const values = sequences.get(interaction.interactionId) ?? new Set<number>();
+    values.add(interaction.sequence);
+    sequences.set(interaction.interactionId, values);
+  }
+  return sequences;
+}
+
+function latestInteractionRequest(
+  events: AgentEvent[],
+  interactionId: string,
+): Extract<AgentEvent, { type: "approval.requested" | "question.requested" }> | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (
+      event !== undefined &&
+      (event.type === "approval.requested" || event.type === "question.requested") &&
+      event.interactionId === interactionId
+    ) return event;
+  }
+  return undefined;
 }
 
 function deriveSession(session: Session, events: AgentEvent[]): Session {

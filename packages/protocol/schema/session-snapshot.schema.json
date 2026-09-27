@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentide.local/schema/session-snapshot.schema.json",
+  "title": "AgentIDE Session Snapshot",
+  "type": "object",
+  "required": ["session", "recentEvents", "pendingInteractions", "latestSequence", "currentStatus"],
+  "properties": {
+    "session": { "$ref": "https://agentide.local/schema/shared-types.schema.json#/$defs/session" },
+    "recentEvents": {
+      "type": "array",
+      "items": { "$ref": "https://agentide.local/schema/agent-event.schema.json" }
+    },
+    "pendingInteractions": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "https://agentide.local/schema/agent-event.schema.json#/$defs/approvalRequested" },
+          { "$ref": "https://agentide.local/schema/agent-event.schema.json#/$defs/questionRequested" }
+        ]
+      }
+    },
+    "latestSequence": { "type": "integer", "minimum": -1 },
+    "currentStatus": {
+      "enum": ["starting", "running", "idle", "waiting_user", "completed", "failed", "cancelled"]
+    }
+  },
+  "additionalProperties": false
+}

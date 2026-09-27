@@ -80,6 +80,21 @@ struct FileBrowserContent: View {
     let openImage: (ImageFileSelection) -> Void
     @State private var expandedPaths: Set<String> = []
     @State private var scrollPosition: String?
+    @State private var pendingScrollPosition: String?
+    @State private var restorationQueue: [String] = []
+    @State private var restoringPath: String?
+    @State private var restoredRecoveryState = false
+
+    init(project: RemoteProject, openText: @escaping (TextFileSelection) -> Void,
+         openImage: @escaping (ImageFileSelection) -> Void) {
+        self.project = project
+        self.openText = openText
+        self.openImage = openImage
+        _expandedPaths = State(initialValue: [])
+        _scrollPosition = State(initialValue: nil)
+        _pendingScrollPosition = State(initialValue: nil)
+        _restorationQueue = State(initialValue: [])
+    }
 
     var body: some View {
         List {
@@ -102,7 +117,16 @@ struct FileBrowserContent: View {
         }
         .animation(.easeInOut(duration: 0.2), value: connection.files.count)
         .scrollPosition(id: $scrollPosition)
-        .task { if connection.entries(projectId: project.id, path: "") == nil { connection.requestFiles(projectId: project.id, relativePath: "") } }
+        .task {
+            restoreRecoveryState()
+            if connection.entries(projectId: project.id, path: "") == nil {
+                connection.requestFiles(projectId: project.id, relativePath: "")
+            }
+            restoreNavigationIfPossible()
+        }
+        .onChange(of: connection.files.count) { restoreNavigationIfPossible() }
+        .onChange(of: expandedPaths) { persistRecoveryState() }
+        .onChange(of: scrollPosition) { persistRecoveryState() }
     }
     private func directoryError(_ message: String, path: String) -> some View {
         VStack(spacing: 8) {
@@ -113,6 +137,118 @@ struct FileBrowserContent: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical)
+    }
+
+    private func persistRecoveryState() {
+        connection.persistFileBrowserNavigation(
+            FileBrowserRecoveryState(expandedPaths: expandedPaths, scrollPosition: scrollPosition),
+            for: project.id
+        )
+    }
+
+    private func restoreRecoveryState() {
+        guard !restoredRecoveryState else { return }
+        restoredRecoveryState = true
+        let state = connection.fileBrowserNavigation(for: project.id).trimmed()
+        expandedPaths = state.expandedPaths
+        pendingScrollPosition = state.scrollPosition
+        restorationQueue = state.expandedPaths.sorted(by: FileBrowserRecoveryState.parentFirst)
+    }
+
+    private func restoreNavigationIfPossible() {
+        if let restoringPath {
+            guard connection.entries(projectId: project.id, path: restoringPath) != nil else { return }
+            self.restoringPath = nil
+        }
+
+        while let nextPath = restorationQueue.first {
+            let parentPath = FileBrowserRecoveryState.parentPath(of: nextPath)
+            guard let parentEntries = connection.entries(projectId: project.id, path: parentPath) else { return }
+            restorationQueue.removeFirst()
+            guard parentEntries.contains(where: { $0.relativePath == nextPath && $0.type == .directory }) else {
+                removeUnavailablePath(nextPath)
+                continue
+            }
+            if connection.entries(projectId: project.id, path: nextPath) == nil {
+                restoringPath = nextPath
+                connection.requestFiles(projectId: project.id, relativePath: nextPath)
+                return
+            }
+        }
+
+        guard let pendingScrollPosition else { return }
+        if isVisible(path: pendingScrollPosition) { scrollPosition = pendingScrollPosition }
+        self.pendingScrollPosition = nil
+    }
+
+    private func isVisible(path: String) -> Bool {
+        let parentPath = FileBrowserRecoveryState.parentPath(of: path)
+        return connection.entries(projectId: project.id, path: parentPath)?.contains(where: { $0.relativePath == path }) == true
+    }
+
+    private func removeUnavailablePath(_ path: String) {
+        let state = FileBrowserRestorationState(
+            expandedPaths: expandedPaths,
+            pendingScrollPosition: pendingScrollPosition,
+            restorationQueue: restorationQueue
+        ).removingUnavailable(path)
+        expandedPaths = state.expandedPaths
+        pendingScrollPosition = state.pendingScrollPosition
+        restorationQueue = state.restorationQueue
+    }
+}
+
+struct FileBrowserRecoveryState: Codable {
+    let expandedPaths: Set<String>
+    let scrollPosition: String?
+
+    func trimmed() -> FileBrowserRecoveryState {
+        var retained = Set<String>()
+        for path in expandedPaths.sorted(by: Self.parentFirst) {
+            guard retained.count < MobileRecoveryLimits.expandedPathsPerProject else { break }
+            let parent = Self.parentPath(of: path)
+            if parent.isEmpty || retained.contains(parent) { retained.insert(path) }
+        }
+        let visibleScrollPosition = scrollPosition.flatMap { path in
+            let parent = Self.parentPath(of: path)
+            return parent.isEmpty || retained.contains(parent) ? path : nil
+        }
+        return FileBrowserRecoveryState(expandedPaths: retained, scrollPosition: visibleScrollPosition)
+    }
+
+    static func parentFirst(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsDepth = lhs.split(separator: "/").count
+        let rhsDepth = rhs.split(separator: "/").count
+        if lhsDepth != rhsDepth { return lhsDepth < rhsDepth }
+        return lhs < rhs
+    }
+
+    static func parentPath(of path: String) -> String {
+        guard let separator = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<separator])
+    }
+
+    static func collapsing(_ path: String, in expandedPaths: Set<String>) -> Set<String> {
+        Set(expandedPaths.filter { $0 != path && !$0.hasPrefix("\(path)/") })
+    }
+
+    static func isInSubtree(_ path: String?, rootedAt root: String) -> Bool {
+        guard let path else { return false }
+        return path == root || path.hasPrefix("\(root)/")
+    }
+}
+
+struct FileBrowserRestorationState: Equatable {
+    var expandedPaths: Set<String>
+    var pendingScrollPosition: String?
+    var restorationQueue: [String]
+
+    func removingUnavailable(_ path: String) -> FileBrowserRestorationState {
+        FileBrowserRestorationState(
+            expandedPaths: FileBrowserRecoveryState.collapsing(path, in: expandedPaths),
+            pendingScrollPosition: FileBrowserRecoveryState.isInSubtree(pendingScrollPosition, rootedAt: path) ? nil : pendingScrollPosition,
+            restorationQueue: restorationQueue.filter { !FileBrowserRecoveryState.isInSubtree($0, rootedAt: path) }
+        )
     }
 }
 
@@ -159,7 +295,9 @@ private struct FileTreeRow: View {
             Button {
                 let wasExpanded = expanded
                 withAnimation {
-                    if wasExpanded { expandedPaths.remove(entry.relativePath) }
+                    if wasExpanded {
+                        expandedPaths = FileBrowserRecoveryState.collapsing(entry.relativePath, in: expandedPaths)
+                    }
                     else { expandedPaths.insert(entry.relativePath) }
                 }
                 if !wasExpanded && connection.entries(projectId: project.id, path: entry.relativePath) == nil {

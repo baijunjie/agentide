@@ -35,6 +35,7 @@ Agent Host 是会话元数据与规范化事件历史的本地权威来源：
 - 会话元数据保存在本地 `sessions.json`；每个会话的事件使用独立 JSONL 日志追加保存，避免流式增量导致整份历史反复重写。
 - Agent Host 按实际写入顺序为每个会话分配从 `0` 开始、严格递增且重启后稳定的 `sequence`。该持久化序列号是事件重放的唯一游标。
 - 事件读取接受 `afterSequence`，只返回该序列号之后的事件。
+- Agent Host 从同一个持久化视图构造 [`SessionSnapshot`](protocol.md#共享业务对象)。交互的解决状态与具体请求序列绑定：回应一个问题不会清除同轮的其他问题，之后重用相同 `interactionId` 的新请求也不会被旧回应误判为已解决。
 - Agent Host 重启后，在下一次会话操作时用 `nativeSessionId` 恢复原生会话。
 - 等待审批或问题时进程重启会使原生请求失效。Agent Host 在首次访问会话数据时记录可恢复错误和失败的 `turn.completed`，把会话恢复为 `idle`；旧交互回应会被明确拒绝，用户仍可开始新的轮次。
 
@@ -53,17 +54,19 @@ Agent Session 把两种 Agent 的统一事件呈现在同一个 Activity Feed �
 - Feed 以 `sequence` 排序。同一序列号的重投事件不重复显示；较晚收到的旧事件会插入正确位置并重新计算状态与交互卡片是否仍可响应。
 - 审批卡片只显示事件声明的动作；问题卡片允许选择事件提供的选项，并仅在 `allowFreeText` 为真时接受自由文本。回应提交后卡片立即停用，同一 `sessionId + interactionId` 不会重复提交；收到成功响应、Agent 继续运行、轮次结束或服务端表示交互已不再等待时，卡片保持已回应状态。
 
-会话列表、创建、发送、取消、订阅和交互回应都必须收到与原请求 `replyTo`、响应类型、Mac 来源以及该请求适用的项目和会话相匹配的响应；不匹配的结果按失败处理。请求在 15 秒内没有响应时会结束等待并显示错误，Session List 与空 Activity Feed 提供显式重试入口。
+会话列表、创建、发送、取消、快照、订阅和交互回应都必须收到与原请求 `replyTo`、响应类型、Mac 来源以及该请求适用的项目和会话相匹配的响应；不匹配的结果按失败处理。请求在 15 秒内没有响应时会结束等待并显示错误，Session List 与空 Activity Feed 提供显式重试入口。
+
+iPhone 会保存有界的恢复缓存，用于在应用重启或暂时离线后恢复最近的项目和会话列表、活动事件、待回应交互状态，以及每个会话在会话/文件浏览/文本查看三层工作区中的位置。该缓存同时受条目数量和 512 KiB 总预算限制，优先保留当前会话与较新数据；超出边界的会话及其历史不保证离线可见。对于仍在缓存内的会话，待回应交互属于必需恢复状态，不会因普通历史或导航状态被淘汰而单独丢失。恢复缓存不是会话权威来源，连回 Mac 后会用 Agent Host 快照覆盖相应会话的缓存状态。
 
 ## iPhone 事件投递
 
-远程会话操作使用 `session.list`、`session.create`、`session.sendMessage`、`session.cancel`、`interaction.respond` 和 `session.subscribe` 请求。Mac 对涉及既有会话的操作校验会话确实属于请求中的项目，再转交本地 Agent Host。
+远程会话操作使用 `session.list`、`session.create`、`session.sendMessage`、`session.cancel`、`session.getSnapshot`、`interaction.respond` 和 `session.subscribe` 请求。Mac 对涉及既有会话的操作校验会话确实属于请求中的项目，再转交本地 Agent Host。
 
 规范化事件以 `agent.event` 推送。可靠投递遵循以下规则：
 
 1. Mac 为每个“目标设备 + 会话”分别维护已确认游标，只发送游标之后的事件。
 2. iPhone 成功解码事件后记录本次运行中已收到的最新序列号，并发送 `agent.event.ack`。在收到对应确认之前，Mac 会重复发送该事件，不会推进游标；超出 Mac 已发送范围的确认不会推进游标。
-3. iPhone 重新连上 Mac 后自动为已打开且未终止的会话发送 `session.subscribe`，携带内存中最后收到的 `afterSequence`；应用重新启动后则从 `-1` 重放完整历史。Mac 从 Agent Host 的持久化历史继续投递，因此 Relay 自身的短时缓冲不是会话恢复依据。
+3. iPhone 打开会话或重新连上 Mac 后，先请求 `session.getSnapshot`，再以快照的 `latestSequence` 作为 `afterSequence` 订阅后续事件。这样快照创建前后发生的事件既不会遗漏，也不会因缓存重复显示。应用进入后台时保存恢复缓存并断开 Relay，回到前台后重连，并按同一流程恢复缓存仍保留的当前与近期未终止会话；已超出有界缓存的会话不会自动恢复订阅。Agent Host 的持久化状态是恢复依据，Relay 的短时缓冲和 iPhone 本地缓存都不是权威历史。
 4. 一批事件以 `turn.completed` 或 `session.completed` 结束且已确认后，Mac 停止该批轮询。后续发送消息或重新订阅会启动新的投递批次。
 
-单个 Relay Envelope 不能超过 1 MiB。若某个规范化事件本身超过该上限，Mac 会在相同 `sequence` 上改发可恢复的 `agent_event_too_large` 错误，使确认游标能够继续前进，不会让后续事件被永久阻塞。
+单个 Relay Envelope 不能超过 1 MiB。若某个规范化事件本身超过该上限，Mac 会在相同 `sequence` 上改发可恢复的 `agent_event_too_large` 错误，使确认游标能够继续前进，不会让后续事件被永久阻塞。会话快照超限时，Mac 可删除最旧的 `recentEvents`，但不会静默删除 `pendingInteractions`；即使移除全部最近事件仍无法容纳必要状态时，快照请求会明确失败。

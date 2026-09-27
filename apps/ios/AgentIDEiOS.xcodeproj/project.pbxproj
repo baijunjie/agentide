@@ -13,6 +13,8 @@
 		B10000000000000000000019 /* FileViewers.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001A /* FileViewers.swift */; };
 		B1000000000000000000001B /* SessionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001C /* SessionViews.swift */; };
 		B1000000000000000000001D /* WorkspaceNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000001E /* WorkspaceNavigation.swift */; };
+		B10000000000000000000021 /* FileBrowserRecoveryStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000022 /* FileBrowserRecoveryStateTests.swift */; };
+		B10000000000000000000023 /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* XCTest.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,43 +25,58 @@
 		B1000000000000000000001A /* FileViewers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileViewers.swift; sourceTree = "<group>"; };
 		B1000000000000000000001C /* SessionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViews.swift; sourceTree = "<group>"; };
 		B1000000000000000000001E /* WorkspaceNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceNavigation.swift; sourceTree = "<group>"; };
+		B10000000000000000000020 /* AgentIDEiOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AgentIDEiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000022 /* FileBrowserRecoveryStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserRecoveryStateTests.swift; sourceTree = "<group>"; };
+		B10000000000000000000024 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = System/Library/Frameworks/XCTest.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		B10000000000000000000006 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000003 /* AgentIDEProtocol in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
+		B10000000000000000000029 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000023 /* XCTest.framework in Frameworks */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		B10000000000000000000007 = {isa = PBXGroup; children = (B10000000000000000000008 /* AgentIDEiOS */, B10000000000000000000009 /* Products */,); sourceTree = "<group>"; };
+		B10000000000000000000007 = {isa = PBXGroup; children = (B10000000000000000000008 /* AgentIDEiOS */, B10000000000000000000025 /* AgentIDEiOSTests */, B10000000000000000000009 /* Products */,); sourceTree = "<group>"; };
 		B10000000000000000000008 /* AgentIDEiOS */ = {isa = PBXGroup; children = (B10000000000000000000002 /* App.swift */, B10000000000000000000016 /* MobileViews.swift */, B10000000000000000000018 /* MobileSupport.swift */, B1000000000000000000001A /* FileViewers.swift */, B1000000000000000000001C /* SessionViews.swift */, B1000000000000000000001E /* WorkspaceNavigation.swift */,); path = AgentIDEiOS; sourceTree = "<group>"; };
-		B10000000000000000000009 /* Products */ = {isa = PBXGroup; children = (B10000000000000000000005 /* AgentIDEiOS.app */,); name = Products; sourceTree = "<group>"; };
+		B10000000000000000000009 /* Products */ = {isa = PBXGroup; children = (B10000000000000000000005 /* AgentIDEiOS.app */, B10000000000000000000020 /* AgentIDEiOSTests.xctest */,); name = Products; sourceTree = "<group>"; };
+		B10000000000000000000025 /* AgentIDEiOSTests */ = {isa = PBXGroup; children = (B10000000000000000000022 /* FileBrowserRecoveryStateTests.swift */,); path = AgentIDEiOSTests; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
 		B1000000000000000000000A /* AgentIDEiOS */ = {isa = PBXNativeTarget; buildConfigurationList = B1000000000000000000000B /* Build configuration list for PBXNativeTarget "AgentIDEiOS" */; buildPhases = (B1000000000000000000000C /* Sources */, B10000000000000000000006 /* Frameworks */, B1000000000000000000000D /* Resources */,); buildRules = (); dependencies = (); name = AgentIDEiOS; packageProductDependencies = (B10000000000000000000004 /* AgentIDEProtocol */,); productName = AgentIDEiOS; productReference = B10000000000000000000005 /* AgentIDEiOS.app */; productType = "com.apple.product-type.application"; };
+		B10000000000000000000026 /* AgentIDEiOSTests */ = {isa = PBXNativeTarget; buildConfigurationList = B10000000000000000000027 /* Build configuration list for PBXNativeTarget "AgentIDEiOSTests" */; buildPhases = (B10000000000000000000028 /* Sources */, B10000000000000000000029 /* Frameworks */, B1000000000000000000002A /* Resources */,); buildRules = (); dependencies = (B1000000000000000000002B /* PBXTargetDependency */,); name = AgentIDEiOSTests; productName = AgentIDEiOSTests; productReference = B10000000000000000000020 /* AgentIDEiOSTests.xctest */; productType = "com.apple.product-type.bundle.unit-test"; };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		B1000000000000000000000E /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2660; LastUpgradeCheck = 2660; TargetAttributes = {B1000000000000000000000A = {CreatedOnToolsVersion = 26.6;};};}; buildConfigurationList = B1000000000000000000000F /* Build configuration list for PBXProject "AgentIDEiOS" */; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base,); mainGroup = B10000000000000000000007; packageReferences = (B10000000000000000000010 /* XCLocalSwiftPackageReference "AgentIDEProtocol" */,); productRefGroup = B10000000000000000000009 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (B1000000000000000000000A /* AgentIDEiOS */,); };
+		B1000000000000000000000E /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 2660; LastUpgradeCheck = 2660; TargetAttributes = {B1000000000000000000000A = {CreatedOnToolsVersion = 26.6;}; B10000000000000000000026 = {CreatedOnToolsVersion = 26.6; TestTargetID = B1000000000000000000000A;};};}; buildConfigurationList = B1000000000000000000000F /* Build configuration list for PBXProject "AgentIDEiOS" */; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base,); mainGroup = B10000000000000000000007; packageReferences = (B10000000000000000000010 /* XCLocalSwiftPackageReference "AgentIDEProtocol" */,); productRefGroup = B10000000000000000000009 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (B1000000000000000000000A /* AgentIDEiOS */, B10000000000000000000026 /* AgentIDEiOSTests */); };
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B1000000000000000000000D /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B1000000000000000000002A /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		B1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001 /* App.swift in Sources */, B10000000000000000000015 /* MobileViews.swift in Sources */, B10000000000000000000017 /* MobileSupport.swift in Sources */, B10000000000000000000019 /* FileViewers.swift in Sources */, B1000000000000000000001B /* SessionViews.swift in Sources */, B1000000000000000000001D /* WorkspaceNavigation.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		B10000000000000000000028 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000021 /* FileBrowserRecoveryStateTests.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B1000000000000000000002B /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = B1000000000000000000000A /* AgentIDEiOS */; };
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B10000000000000000000011 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = AgentIDE; INFOPLIST_KEY_NSCameraUsageDescription = "Scan the pairing QR code shown by AgentIDE on your Mac."; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = dev.agentide.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
 		B10000000000000000000012 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = AgentIDE; INFOPLIST_KEY_NSCameraUsageDescription = "Scan the pairing QR code shown by AgentIDE on your Mac."; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = dev.agentide.ios; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+		B1000000000000000000002C /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = dev.agentide.ios.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphonesimulator; SUPPORTED_PLATFORMS = "iphonesimulator"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AgentIDEiOS.app/AgentIDEiOS"; }; name = Debug; };
+		B1000000000000000000002D /* Release */ = {isa = XCBuildConfiguration; buildSettings = {BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = dev.agentide.ios.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphonesimulator; SUPPORTED_PLATFORMS = "iphonesimulator"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = 1; TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AgentIDEiOS.app/AgentIDEiOS"; }; name = Release; };
 		B10000000000000000000013 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_OPTIMIZATION_LEVEL = 0; ONLY_ACTIVE_ARCH = YES; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
 		B10000000000000000000014 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {COPY_PHASE_STRIP = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; SWIFT_OPTIMIZATION_LEVEL = "-O"; VALIDATE_PRODUCT = YES; }; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		B1000000000000000000000B /* Build configuration list for PBXNativeTarget "AgentIDEiOS" */ = {isa = XCConfigurationList; buildConfigurations = (B10000000000000000000011 /* Debug */, B10000000000000000000012 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		B10000000000000000000027 /* Build configuration list for PBXNativeTarget "AgentIDEiOSTests" */ = {isa = XCConfigurationList; buildConfigurations = (B1000000000000000000002C /* Debug */, B1000000000000000000002D /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		B1000000000000000000000F /* Build configuration list for PBXProject "AgentIDEiOS" */ = {isa = XCConfigurationList; buildConfigurations = (B10000000000000000000013 /* Debug */, B10000000000000000000014 /* Release */,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 

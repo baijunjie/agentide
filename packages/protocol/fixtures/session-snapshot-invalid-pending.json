@@ -1,0 +1,17 @@
+{
+  "session": {
+    "id": "session-1",
+    "projectId": "project-1",
+    "agentType": "codex",
+    "title": "First session",
+    "status": "waiting_user",
+    "createdAt": "2026-09-22T00:00:00.000Z",
+    "updatedAt": "2026-09-22T00:00:09.000Z"
+  },
+  "recentEvents": [],
+  "pendingInteractions": [
+    { "id": "e10", "sessionId": "session-1", "sequence": 9, "timestamp": "2026-09-22T00:00:09.000Z", "type": "status", "status": "waiting_user" }
+  ],
+  "latestSequence": 9,
+  "currentStatus": "waiting_user"
+}

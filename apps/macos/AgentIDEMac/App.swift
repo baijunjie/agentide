@@ -224,6 +224,26 @@ final class MacConnection: ObservableObject {
             } catch {
                 sendResponse(to: source, replyTo: requestId, type: "session.create.response", projectId: projectId, error: error.localizedDescription, errorCode: "session_request_failed")
             }
+        } else if type == "session.getSnapshot" {
+            guard let projectId = message["projectId"] as? String,
+                  let sessionId = message["sessionId"] as? String else {
+                sendResponse(to: source, replyTo: requestId, type: "session.getSnapshot.response", error: "Invalid session.getSnapshot request", errorCode: "session_request_failed")
+                return
+            }
+            do {
+                let snapshot: SessionSnapshot = try await hostRequest("/sessions/\(sessionId)/snapshot", method: "GET", body: Optional<String>.none)
+                guard isValidSnapshot(snapshot, sessionId: sessionId, projectId: projectId) else {
+                    throw NSError(domain: "AgentIDE", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid session snapshot"])
+                }
+                guard let snapshotValue = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any] else {
+                    throw NSError(domain: "AgentIDE", code: 500, userInfo: [NSLocalizedDescriptionKey: "Invalid session snapshot"])
+                }
+                sendResponse(to: source, replyTo: requestId, type: "session.getSnapshot.response", projectId: projectId, sessionId: sessionId,
+                             payload: try relaySnapshotPayload(snapshotValue, projectId: projectId, sessionId: sessionId, target: source, replyTo: requestId))
+            } catch {
+                let code = (error as NSError).code == 413 ? "snapshot_too_large" : "session_request_failed"
+                sendResponse(to: source, replyTo: requestId, type: "session.getSnapshot.response", projectId: projectId, sessionId: sessionId, error: error.localizedDescription, errorCode: code)
+            }
         } else if type == "session.sendMessage" {
             guard let projectId = message["projectId"] as? String,
                   let sessionId = message["sessionId"] as? String,
@@ -391,6 +411,38 @@ final class MacConnection: ObservableObject {
                 "type": "error", "code": "agent_event_too_large", "message": "Agent event exceeded the relay size limit", "recoverable": true]
     }
 
+    private func relaySnapshotPayload(_ snapshot: [String: Any], projectId: String, sessionId: String, target: String, replyTo: String) throws -> [String: Any] {
+        var payload = snapshot
+        var events = payload["recentEvents"] as? [[String: Any]] ?? []
+        for index in events.indices {
+            guard let sequence = events[index]["sequence"] as? Int else { continue }
+            events[index] = relayPayload(for: events[index], projectId: projectId, sessionId: sessionId, target: target, sequence: sequence)
+        }
+        payload["recentEvents"] = events
+
+        while !responseFitsRelayBudget(payload, projectId: projectId, sessionId: sessionId, target: target, replyTo: replyTo), !events.isEmpty {
+            events.removeFirst()
+            payload["recentEvents"] = events
+        }
+
+        if !responseFitsRelayBudget(payload, projectId: projectId, sessionId: sessionId, target: target, replyTo: replyTo) {
+            throw NSError(
+                domain: "AgentIDE",
+                code: 413,
+                userInfo: [NSLocalizedDescriptionKey: "Session snapshot required state exceeds the relay size limit"]
+            )
+        }
+        return payload
+    }
+
+    private func responseFitsRelayBudget(_ payload: [String: Any], projectId: String, sessionId: String, target: String, replyTo: String) -> Bool {
+        let response: [String: Any] = ["version": 1, "id": UUID().uuidString, "type": "session.getSnapshot.response",
+                                       "sourceDeviceId": deviceId, "targetDeviceId": target, "projectId": projectId, "sessionId": sessionId,
+                                       "timestamp": ISO8601DateFormatter().string(from: Date()), "replyTo": replyTo, "ok": true, "payload": payload]
+        guard let data = try? JSONSerialization.data(withJSONObject: response) else { return false }
+        return data.count <= maxRelayMessageBytes
+    }
+
     private func publicProject(_ project: Project) -> [String: Any] {
         ["id": project.id, "name": project.name, "createdAt": project.createdAt, "enabledAgents": project.enabledAgents.map(\.rawValue), "online": connectionState == "Connected"]
     }
@@ -469,3 +521,41 @@ private struct InteractionResponseRequest: Encodable {
 }
 private struct ErrorResponse: Decodable { let error: String }
 private func isSecure(_ url: URL) -> Bool { url.scheme == "https" || (url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost")) }
+
+private func isValidSnapshot(_ snapshot: SessionSnapshot, sessionId: String, projectId: String) -> Bool {
+    guard snapshot.session.id == sessionId,
+          snapshot.session.projectId == projectId,
+          snapshot.currentStatus == snapshot.session.status else { return false }
+    return snapshot.recentEvents.allSatisfy { event in
+        let identity = eventIdentity(event)
+        return identity.sessionId == sessionId && identity.sequence <= snapshot.latestSequence
+    } && snapshot.pendingInteractions.allSatisfy { interaction in
+        let identity = pendingInteractionIdentity(interaction)
+        return identity.sessionId == sessionId && identity.sequence <= snapshot.latestSequence
+    }
+}
+
+private func eventIdentity(_ event: AgentEvent) -> (sessionId: String, sequence: Int) {
+    switch event {
+    case let .sessionStarted(value): return (value.sessionId, value.sequence)
+    case let .textDelta(value): return (value.sessionId, value.sequence)
+    case let .message(value): return (value.sessionId, value.sequence)
+    case let .toolStarted(value): return (value.sessionId, value.sequence)
+    case let .toolFinished(value): return (value.sessionId, value.sequence)
+    case let .command(value): return (value.sessionId, value.sequence)
+    case let .fileChanged(value): return (value.sessionId, value.sequence)
+    case let .approvalRequested(value): return (value.sessionId, value.sequence)
+    case let .questionRequested(value): return (value.sessionId, value.sequence)
+    case let .status(value): return (value.sessionId, value.sequence)
+    case let .error(value): return (value.sessionId, value.sequence)
+    case let .turnCompleted(value): return (value.sessionId, value.sequence)
+    case let .sessionCompleted(value): return (value.sessionId, value.sequence)
+    }
+}
+
+private func pendingInteractionIdentity(_ interaction: PendingInteraction) -> (sessionId: String, sequence: Int) {
+    switch interaction {
+    case let .approvalRequested(value): return (value.sessionId, value.sequence)
+    case let .questionRequested(value): return (value.sessionId, value.sequence)
+    }
+}

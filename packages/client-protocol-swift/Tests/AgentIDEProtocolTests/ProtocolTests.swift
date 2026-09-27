@@ -161,3 +161,29 @@ private func fixture(named name: String) throws -> Data {
     #expect(models.session.status == .waitingUser)
     #expect(models.fileEntry.type == .file)
 }
+
+@Test func sessionSnapshotFixturePreservesAllPendingInteractions() throws {
+    let decoder = JSONDecoder()
+    let snapshot = try decoder.decode(SessionSnapshot.self, from: fixture(named: "session-snapshot"))
+
+    #expect(snapshot.session.id == "session-1")
+    #expect(snapshot.recentEvents.count == 3)
+    #expect(snapshot.pendingInteractions.count == 2)
+    #expect(snapshot.latestSequence == 9)
+    #expect(snapshot.currentStatus == .waitingUser)
+
+    guard case .approvalRequested = snapshot.pendingInteractions[0] else {
+        Issue.record("Expected approval interaction")
+        return
+    }
+    guard case .questionRequested = snapshot.pendingInteractions[1] else {
+        Issue.record("Expected question interaction")
+        return
+    }
+
+    for name in ["session-snapshot-invalid-pending", "session-snapshot-invalid-sequence"] {
+        #expect(throws: (any Error).self) {
+            _ = try decoder.decode(SessionSnapshot.self, from: fixture(named: name))
+        }
+    }
+}

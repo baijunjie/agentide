@@ -54,6 +54,7 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   const validateAgentEvent = ajv.compile(await readJson(schemaUrl("agent-event")));
   const sharedSchema = await readJson(schemaUrl("shared-types"));
   ajv.addSchema(sharedSchema);
+  const validateSessionSnapshot = ajv.compile(await readJson(schemaUrl("session-snapshot")));
   const validateProject = ajv.getSchema(`${sharedSchema.$id}#/$defs/project`);
   const validateSession = ajv.getSchema(`${sharedSchema.$id}#/$defs/session`);
   const validateFileEntry = ajv.getSchema(`${sharedSchema.$id}#/$defs/fileEntry`);
@@ -122,6 +123,15 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   assert.equal(validateProject(sharedTypes.project), true, JSON.stringify(validateProject.errors));
   assert.equal(validateSession(sharedTypes.session), true, JSON.stringify(validateSession.errors));
   assert.equal(validateFileEntry(sharedTypes.fileEntry), true, JSON.stringify(validateFileEntry.errors));
+
+  assert.equal(
+    validateSessionSnapshot(await readJson(fixtureUrl("session-snapshot"))),
+    true,
+    JSON.stringify(validateSessionSnapshot.errors),
+  );
+  for (const name of ["session-snapshot-invalid-pending", "session-snapshot-invalid-sequence"]) {
+    assert.equal(validateSessionSnapshot(await readJson(fixtureUrl(name))), false, name);
+  }
 });
 
 function isProtocolTimestamp(value) {

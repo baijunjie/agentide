@@ -1,11 +1,13 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AgentAdapter, AgentEvent, AgentInput, InteractionResponse } from "@agentide/agent-core";
+import type { AgentAdapter, AgentEvent, AgentInput, InteractionResponse, SessionSnapshot } from "@agentide/agent-core";
 import type { AgentType, Session } from "@agentide/shared-types";
 import { ClaudeAdapter } from "@agentide/agent-claude";
 import { CodexAdapter } from "@agentide/agent-codex";
 import { ProjectStore } from "./project-store.js";
 import { SessionStore } from "./session-store.js";
+
+const SNAPSHOT_EVENT_LIMIT = 200;
 
 export interface CreateManagedSession {
   projectId: string;
@@ -56,6 +58,21 @@ export class SessionManager {
     return this.store.events(sessionId, afterSequence);
   }
 
+  async snapshot(sessionId: string): Promise<SessionSnapshot> {
+    await this.ensureReconciled();
+    const snapshot = await this.store.snapshot(sessionId);
+    if (snapshot === undefined) throw new Error("Session not found");
+    const { session, events, resolvedInteractionSequences } = snapshot;
+    const pendingInteractions = derivePendingInteractions(events, resolvedInteractionSequences);
+    return {
+      session,
+      recentEvents: events.slice(-SNAPSHOT_EVENT_LIMIT),
+      pendingInteractions,
+      latestSequence: events.at(-1)?.sequence ?? -1,
+      currentStatus: session.status,
+    };
+  }
+
   async create(input: CreateManagedSession): Promise<Session> {
     await this.ensureReconciled();
     const project = await this.projects.get(input.projectId);
@@ -102,6 +119,7 @@ export class SessionManager {
       }
       const { adapter, runtimeId } = await this.load(sessionId);
       await adapter.respondToInteraction(runtimeId, interactionId, response);
+      await this.store.resolveInteraction(sessionId, interactionId);
     });
   }
 
@@ -222,12 +240,13 @@ export class SessionManager {
     const sessions = await this.store.list();
     for (const session of sessions) {
       if (session.status === "waiting_user") {
-        const events = await this.store.events(session.id);
-        const interactionIds = events
-          .filter((event): event is Extract<AgentEvent, { type: "approval.requested" | "question.requested" }> =>
-            event.type === "approval.requested" || event.type === "question.requested")
+        const snapshot = await this.store.snapshot(session.id);
+        if (snapshot === undefined) continue;
+        const { events, resolvedInteractionSequences } = snapshot;
+        const interactionIds = derivePendingInteractions(events, resolvedInteractionSequences)
           .map((event) => event.interactionId);
         this.expiredInteractions.set(session.id, new Set(interactionIds));
+        await this.store.resolveInteractions(session.id, interactionIds);
         await this.recordFailure(session.id, "agent_interaction_expired", new Error("Pending interaction expired when Agent Host restarted"));
       }
     }
@@ -238,4 +257,23 @@ function titleFor(prompt: string): string {
   const value = prompt.trim();
   if (value.length === 0) return "New session";
   return value.length <= 80 ? value : `${value.slice(0, 77)}...`;
+}
+
+function derivePendingInteractions(
+  events: AgentEvent[],
+  resolvedInteractionSequences: ReadonlyMap<string, ReadonlySet<number>>,
+): Extract<AgentEvent, { type: "approval.requested" | "question.requested" }>[] {
+  const pending = new Map<string, Extract<AgentEvent, { type: "approval.requested" | "question.requested" }>>();
+  for (const event of events) {
+    if (event.type === "approval.requested" || event.type === "question.requested") {
+      if (!resolvedInteractionSequences.get(event.interactionId)?.has(event.sequence)) pending.set(event.interactionId, event);
+    } else if (
+      (event.type === "status" && (event.status === "running" || event.status === "idle")) ||
+      event.type === "turn.completed" ||
+      event.type === "session.completed"
+    ) {
+      pending.clear();
+    }
+  }
+  return [...pending.values()];
 }

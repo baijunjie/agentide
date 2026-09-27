@@ -118,6 +118,7 @@ test("local IPC exposes the unified session operation boundary", async (context)
     async list(projectId) { calls.push(["list", projectId]); return [session]; },
     async get(sessionId) { calls.push(["get", sessionId]); return session; },
     async events(sessionId, afterSequence) { calls.push(["events", sessionId, afterSequence]); return [event(sessionId, "status", { status: "running" })]; },
+    async snapshot(sessionId) { calls.push(["snapshot", sessionId]); return { session, recentEvents: [], pendingInteractions: [], latestSequence: 4, currentStatus: "running" }; },
     async create(input) { calls.push(["create", input]); return session; },
     async sendMessage(sessionId, input) { calls.push(["message", sessionId, input]); },
     async cancel(sessionId) { calls.push(["cancel", sessionId]); },
@@ -132,6 +133,14 @@ test("local IPC exposes the unified session operation boundary", async (context)
   assert.equal((await json(`${base}/sessions`, "POST", { projectId: "project-1", agentType: "codex", initialPrompt: "Task" }, 201)).id, session.id);
   assert.equal((await json(`${base}/sessions?projectId=project-1`, "GET")).sessions.length, 1);
   assert.equal((await json(`${base}/sessions/session-1`, "GET")).id, session.id);
+  assert.deepEqual(await json(`${base}/sessions/session-1/snapshot`, "GET"), {
+    session,
+    recentEvents: [],
+    pendingInteractions: [],
+    latestSequence: 4,
+    currentStatus: "running",
+  });
+  assert.deepEqual(calls.at(-1), ["snapshot", "session-1"]);
   assert.equal((await json(`${base}/sessions/session-1/events?afterSequence=2`, "GET")).events.length, 1);
   await json(`${base}/sessions/session-1/messages`, "POST", { content: "Continue" }, 204);
   await json(`${base}/sessions/session-1/cancel`, "POST", {}, 204);
@@ -207,6 +216,124 @@ test("session store derives state from atomic events and ignores a truncated JSO
   const restarted = new SessionStore(path);
   assert.equal((await restarted.get(session.id)).status, "running");
   assert.equal((await restarted.events(session.id)).length, 4);
+});
+
+test("session snapshots bound event history and retain each unresolved interaction", async (context) => {
+  const base = await mkdtemp(join(tmpdir(), "agentide-session-snapshot-"));
+  context.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, "project");
+  await mkdir(root);
+  const projects = new ProjectStore(join(base, "projects.json"), "");
+  const project = await projects.add(root);
+  const store = new SessionStore(join(base, "sessions.json"));
+  const session = { id: "session-1", projectId: project.id, agentType: "codex", nativeSessionId: "native-1", title: "Task", status: "idle", createdAt: "2026-09-24T00:00:00.000Z", updatedAt: "2026-09-24T00:00:00.000Z" };
+  await store.create(session);
+  const adapter = new FakeAdapter();
+  const manager = new SessionManager(projects, store, new Map([["codex", adapter]]));
+  await manager.get(session.id);
+  for (let index = 0; index < 201; index += 1) {
+    await store.record(session.id, event(session.id, "message", { role: "agent", content: `${index}`, format: "plain" }));
+  }
+  await store.record(session.id, event(session.id, "approval.requested", { interactionId: "approval-1", title: "Approve", actions: ["reject"] }));
+  const waiting = await manager.snapshot(session.id);
+  assert.equal(waiting.recentEvents.length, 200);
+  assert.equal(waiting.recentEvents[0].sequence, 2);
+  assert.equal(waiting.latestSequence, 201);
+  assert.equal(waiting.currentStatus, "waiting_user");
+  assert.deepEqual(waiting.pendingInteractions.map((interaction) => interaction.interactionId), ["approval-1"]);
+
+  await store.record(session.id, event(session.id, "question.requested", { interactionId: "question-1", question: "Continue?", allowFreeText: true }));
+  await store.record(session.id, event(session.id, "question.requested", { interactionId: "question-2", question: "Proceed?", allowFreeText: true }));
+  await manager.respond(session.id, "question-1", { kind: "question", freeText: "Yes" });
+  assert.deepEqual((await manager.snapshot(session.id)).pendingInteractions.map((interaction) => interaction.interactionId), ["approval-1", "question-2"]);
+  assert.deepEqual(adapter.interactions, [{ sessionId: "native-1", interactionId: "question-1", response: { kind: "question", freeText: "Yes" } }]);
+
+  await store.record(session.id, event(session.id, "status", { status: "running" }));
+  const restarted = new SessionManager(projects, new SessionStore(join(base, "sessions.json")), new Map([["codex", new FakeAdapter()]]));
+  assert.deepEqual((await restarted.snapshot(session.id)).pendingInteractions, []);
+
+  await store.record(session.id, event(session.id, "question.requested", { interactionId: "question-1", question: "Continue again?", allowFreeText: true }));
+  assert.deepEqual((await manager.snapshot(session.id)).pendingInteractions.map((interaction) => interaction.interactionId), ["question-1"]);
+  const persistedSnapshot = await new SessionStore(join(base, "sessions.json")).snapshot(session.id);
+  assert.ok(persistedSnapshot);
+  assert.equal(persistedSnapshot.resolvedInteractionSequences.get("question-1")?.has(202), true);
+  assert.equal(persistedSnapshot.resolvedInteractionSequences.get("question-1")?.has(205), false);
+});
+
+test("first snapshot reconciles a later interaction generation from stale resolved metadata", async (context) => {
+  const base = await mkdtemp(join(tmpdir(), "agentide-stale-interaction-metadata-"));
+  context.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, "project");
+  await mkdir(root);
+  const projects = new ProjectStore(join(base, "projects.json"), "");
+  const project = await projects.add(root);
+  const path = join(base, "sessions.json");
+  const store = new SessionStore(path);
+  const session = { id: "session-1", projectId: project.id, agentType: "codex", nativeSessionId: "native-1", title: "Task", status: "idle", createdAt: "2026-09-24T00:00:00.000Z", updatedAt: "2026-09-24T00:00:00.000Z" };
+  await store.create(session);
+  await store.record(session.id, event(session.id, "approval.requested", { interactionId: "repeat", title: "First", actions: ["reject"] }));
+  await store.resolveInteraction(session.id, "repeat");
+  const staleMetadata = await readFile(path, "utf8");
+  await store.record(session.id, event(session.id, "status", { status: "running" }));
+  await store.record(session.id, event(session.id, "approval.requested", { interactionId: "repeat", title: "Second", actions: ["reject"] }));
+
+  await writeFile(path, staleMetadata, { mode: 0o600 });
+  const reloaded = new SessionStore(path);
+  const snapshot = await reloaded.snapshot(session.id);
+  assert.ok(snapshot);
+  assert.equal(snapshot.resolvedInteractionSequences.get("repeat")?.has(0), true);
+  const manager = new SessionManager(projects, reloaded, new Map([["codex", new FakeAdapter()]]));
+  assert.deepEqual((await manager.snapshot(session.id)).pendingInteractions, []);
+  assert.equal((await manager.get(session.id)).status, "idle");
+  assert.ok((await manager.events(session.id)).some((value) => value.code === "agent_interaction_expired"));
+  const reconciled = await reloaded.snapshot(session.id);
+  assert.ok(reconciled);
+  assert.equal(reconciled.resolvedInteractionSequences.get("repeat")?.has(2), true);
+});
+
+test("resolved interaction generations accumulate for a repeated interaction id", async (context) => {
+  const base = await mkdtemp(join(tmpdir(), "agentide-resolved-interaction-generations-"));
+  context.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, "project");
+  await mkdir(root);
+  const projects = new ProjectStore(join(base, "projects.json"), "");
+  const project = await projects.add(root);
+  const store = new SessionStore(join(base, "sessions.json"));
+  const session = { id: "session-1", projectId: project.id, agentType: "codex", nativeSessionId: "native-1", title: "Task", status: "idle", createdAt: "2026-09-24T00:00:00.000Z", updatedAt: "2026-09-24T00:00:00.000Z" };
+  await store.create(session);
+  const manager = new SessionManager(projects, store, new Map([["codex", new FakeAdapter()]]));
+  await manager.get(session.id);
+
+  await store.record(session.id, event(session.id, "approval.requested", { interactionId: "repeat", title: "First", actions: ["reject"] }));
+  await store.resolveInteraction(session.id, "repeat");
+  await store.record(session.id, event(session.id, "approval.requested", { interactionId: "repeat", title: "Second", actions: ["reject"] }));
+  await store.resolveInteraction(session.id, "repeat");
+
+  const snapshot = await store.snapshot(session.id);
+  assert.ok(snapshot);
+  assert.equal(snapshot.resolvedInteractionSequences.get("repeat")?.has(0), true);
+  assert.equal(snapshot.resolvedInteractionSequences.get("repeat")?.has(1), true);
+  assert.deepEqual((await manager.snapshot(session.id)).pendingInteractions, []);
+});
+
+test("session store snapshots do not tear session state from events", async (context) => {
+  const base = await mkdtemp(join(tmpdir(), "agentide-snapshot-consistency-"));
+  context.after(() => rm(base, { recursive: true, force: true }));
+  const store = new SessionStore(join(base, "sessions.json"));
+  const session = { id: "session-1", projectId: "project-1", agentType: "codex", title: "Task", status: "starting", createdAt: "2026-09-24T00:00:00.000Z", updatedAt: "2026-09-24T00:00:00.000Z" };
+  await store.create(session);
+  await store.events(session.id);
+
+  const recording = store.record(session.id, event(session.id, "status", { status: "running" }));
+  await Promise.resolve();
+  const snapshot = await store.snapshot(session.id);
+  await recording;
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.events.length, 1);
+  assert.equal(snapshot.events[0].sequence, 0);
+  assert.equal(snapshot.session.status, "running");
+  assert.equal(snapshot.session.updatedAt, snapshot.events[0].timestamp);
 });
 
 function event(sessionId, type, extra) {

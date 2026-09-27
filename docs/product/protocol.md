@@ -79,5 +79,6 @@ Claude 与 Codex 的现行能力、会话恢复以及统一事件的持久化和
 - `Project` 保存稳定标识、显示名、本机根路径、创建时间和启用的 Agent 类型。根路径属于 Mac 本地项目模型。
 - `Session` 关联项目与 Agent，状态固定为 `starting`、`running`、`idle`、`waiting_user`、`completed`、`failed` 或 `cancelled`。`idle` 表示当前没有活动轮次但会话仍可继续。
 - `FileEntry` 使用项目内相对路径标识文件或目录，并可附带大小、扩展名以及文本/图片能力标记。
+- `SessionSnapshot` 是远程客户端恢复会话的一致视图：`session` 和 `currentStatus` 给出同一时点的会话状态，`recentEvents` 包含最近最多 200 条持久化事件，`pendingInteractions` 单独列出仍待回应的审批与问题，`latestSequence` 是完整持久化事件流的最新序列号（空流为 `-1`）。最新序列号可以高于 `recentEvents` 窗口的首条序列号，客户端不应把该窗口当作完整历史。
 
-Envelope 与 `AgentEvent` 由 TypeScript 运行时校验器、Draft 2020-12 JSON Schema 和 Swift `Codable` DTO 共同消费正反例 fixtures，以固定跨语言的接受与拒绝行为。`Project`、`Session` 和 `FileEntry` 当前只有 TypeScript 静态类型、JSON Schema 与 Swift DTO，并以正例 fixture 验证共同解码；它们没有独立的 TypeScript 运行时守卫。协议字段、枚举或可选值语义变化时，相关类型、Schema、DTO 与覆盖该边界的 fixtures 必须同步更新。
+Envelope 与 `AgentEvent` 由 TypeScript 运行时校验器、Draft 2020-12 JSON Schema 和 Swift `Codable` DTO 共同消费正反例 fixtures，以固定跨语言的接受与拒绝行为。`Project`、`Session` 和 `FileEntry` 当前只有 TypeScript 静态类型、JSON Schema 与 Swift DTO，并以正例 fixture 验证共同解码；`SessionSnapshot` 也使用 JSON Schema、Swift DTO 与正反例 fixtures 验证边界。这些对象没有独立的 TypeScript 运行时守卫。协议字段、枚举或可选值语义变化时，相关类型、Schema、DTO 与覆盖该边界的 fixtures 必须同步更新。

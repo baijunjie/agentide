@@ -1,0 +1,15 @@
+{
+  "session": {
+    "id": "session-1",
+    "projectId": "project-1",
+    "agentType": "codex",
+    "title": "First session",
+    "status": "starting",
+    "createdAt": "2026-09-22T00:00:00.000Z",
+    "updatedAt": "2026-09-22T00:00:00.000Z"
+  },
+  "recentEvents": [],
+  "pendingInteractions": [],
+  "latestSequence": -2,
+  "currentStatus": "starting"
+}

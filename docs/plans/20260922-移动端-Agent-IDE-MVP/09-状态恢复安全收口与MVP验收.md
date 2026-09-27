@@ -5,16 +5,18 @@
 
 ## 技术设计
 
-- [ ] Mac 继续作为 Session Source of Truth，本地持久化 projects、sessions、events、paired devices 和 settings。
-- [ ] iOS 只持久化 paired Macs、project metadata、session metadata、recent sessions、UI navigation state 和 recent file paths，事件只缓存最近一段。
-- [ ] iOS 打开项目时请求 `session.list`；进入会话时请求 `session.getSnapshot`，获取 session metadata、recent normalized events、current pending interaction 和 current status。
-- [ ] snapshot 恢复完成后订阅 live event stream，使用 sequence 衔接历史事件与实时事件。
+- [x] Mac 上的 Agent Host 继续作为 projects、sessions 和 events 的本地权威源，Mac 持久化设备设置；设备绑定与撤销仍以 Relay 控制面为权威，避免产生两套安全状态。
+- [x] iOS 只持久化 paired Mac、project metadata、session metadata、recent sessions、UI navigation state 和 recent file paths，事件只缓存最近一段。
+- [x] iOS 打开项目时请求 `session.list`；进入会话时请求 `session.getSnapshot`，获取 session metadata、recent normalized events、current pending interactions 和 current status。
+- [x] snapshot 恢复完成后订阅 live event stream，使用 sequence 衔接历史事件与实时事件。
 - [ ] 确认所有传输使用 TLS/WSS，device identity 可验证，device token 可撤销，pairing secret 单次且短期有效。
-- [ ] 确认 iOS 只能访问已登记 Project，所有文件路径均经过遍历、绝对路径与符号链接逃逸检查。
-- [ ] 确认 Relay 不运行 Agent、不读取项目文件、不保存项目源码，并保留未来引入 payload E2EE 的协议空间。
+- [x] 确认 iOS 只能访问已登记 Project，所有文件路径均经过遍历、绝对路径与符号链接逃逸检查。
+- [x] 确认 Relay 不运行 Agent、不读取项目文件、不保存项目源码，并保留未来引入 payload E2EE 的协议空间。
 
 ## 实现方案
 
+- [ ] 将固定端口的开发期 Agent Host 替换为随 macOS App 分发、认证并受监督的 companion process；App 退出时停止 companion，发布构建不得回退到外部 Node 或固定 `127.0.0.1:8788`。
+- [ ] 使用已配对真机完整检查 Session → Files → Text File、Session → Files → Image 与逐级返回，覆盖横竖屏、手势阈值和安全区域。
 - [ ] 覆盖 WebSocket 断开、iOS 进入后台、iOS 被系统结束与 Mac 上 Agent 仍在运行时的恢复流程。
 - [ ] 验证 snapshot 中的待审批/待回答交互不丢失，恢复后的回复仍可到达正确 Agent session。
 - [ ] 执行 Demo 1：Mac 启动、添加项目、配对 iPhone，iPhone 显示项目。

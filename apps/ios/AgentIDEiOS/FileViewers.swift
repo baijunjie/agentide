@@ -2,7 +2,7 @@ import AgentIDEProtocol
 import SwiftUI
 import UIKit
 
-struct TextFileSelection: Hashable {
+struct TextFileSelection: Codable, Hashable {
     let projectId: String
     let name: String
     let relativePath: String
@@ -16,7 +16,7 @@ struct TextFileSelection: Hashable {
     }
 }
 
-struct ImageFileSelection: Identifiable, Equatable {
+struct ImageFileSelection: Codable, Identifiable, Equatable {
     let projectId: String
     let name: String
     let relativePath: String

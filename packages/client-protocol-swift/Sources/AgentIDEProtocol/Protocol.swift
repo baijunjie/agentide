@@ -564,6 +564,63 @@ public enum AgentEvent: Codable, Equatable, Sendable {
     }
 }
 
+public enum PendingInteraction: Codable, Equatable, Sendable {
+    case approvalRequested(ApprovalRequestedEvent)
+    case questionRequested(QuestionRequestedEvent)
+
+    private enum CodingKeys: String, CodingKey { case type }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .type) {
+        case "approval.requested":
+            try rejectExplicitNull(decoder, fields: ["description", "command"])
+            let event = try ApprovalRequestedEvent(from: decoder)
+            guard !event.actions.isEmpty else { throw ProtocolDecodingError.emptyActions }
+            self = .approvalRequested(event)
+        case "question.requested":
+            try rejectExplicitNull(decoder, fields: ["options"])
+            self = .questionRequested(try QuestionRequestedEvent(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .type,
+                in: container,
+                debugDescription: "Pending interaction must be an approval or question request"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case let .approvalRequested(event): try event.encode(to: encoder)
+        case let .questionRequested(event): try event.encode(to: encoder)
+        }
+    }
+}
+
+public struct SessionSnapshot: Codable, Equatable, Sendable {
+    public let session: Session
+    public let recentEvents: [AgentEvent]
+    public let pendingInteractions: [PendingInteraction]
+    public let latestSequence: Int
+    public let currentStatus: SessionStatus
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case session, recentEvents, pendingInteractions, latestSequence, currentStatus
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        session = try container.decode(Session.self, forKey: .session)
+        recentEvents = try container.decode([AgentEvent].self, forKey: .recentEvents)
+        pendingInteractions = try container.decode([PendingInteraction].self, forKey: .pendingInteractions)
+        latestSequence = try container.decode(Int.self, forKey: .latestSequence)
+        guard latestSequence >= -1 else { throw ProtocolDecodingError.invalidSequence(latestSequence) }
+        currentStatus = try container.decode(SessionStatus.self, forKey: .currentStatus)
+    }
+}
+
 private enum ProtocolDecodingError: Error {
     case emptyActions
     case emptyString(String)

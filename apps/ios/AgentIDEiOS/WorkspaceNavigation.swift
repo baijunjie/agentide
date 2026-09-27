@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum WorkspaceLevel: Equatable {
+enum WorkspaceLevel: Codable, Equatable {
     case session
     case browser
     case file(TextFileSelection)
@@ -14,7 +14,7 @@ enum WorkspaceLevel: Equatable {
     }
 }
 
-struct WorkspaceNavigationState {
+struct WorkspaceNavigationState: Codable, Equatable {
     var level: WorkspaceLevel = .session
     var fullScreenImage: ImageFileSelection?
     private(set) var presentedFile: TextFileSelection?
@@ -51,6 +51,7 @@ struct WorkspaceNavigationState {
         if case .file = level { return }
         presentedFile = nil
     }
+
 }
 
 struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, FileContent: View>: View {

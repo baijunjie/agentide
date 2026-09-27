@@ -1,4 +1,4 @@
-import type { AgentType, Session } from "@agentide/shared-types";
+import type { AgentType, Session, SessionStatus } from "@agentide/shared-types";
 import { isProtocolTimestamp } from "@agentide/protocol";
 
 export interface BaseEvent {
@@ -115,6 +115,16 @@ export type AgentEvent =
   | ErrorEvent
   | TurnCompletedEvent
   | SessionCompletedEvent;
+
+export type PendingInteraction = ApprovalRequestedEvent | QuestionRequestedEvent;
+
+export interface SessionSnapshot {
+  session: Session;
+  recentEvents: AgentEvent[];
+  pendingInteractions: PendingInteraction[];
+  latestSequence: number;
+  currentStatus: SessionStatus;
+}
 
 export interface AgentCapabilities {
   approvals: boolean;

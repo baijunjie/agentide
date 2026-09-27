@@ -148,6 +148,11 @@ private struct AgentSessionView: View {
     @State private var input = ""
     @State private var workspace = WorkspaceNavigationState()
 
+    init(project: RemoteProject, session: Session) {
+        self.project = project
+        self.session = session
+    }
+
     private var events: [AgentEvent] { connection.sessionEvents[session.id] ?? [] }
     private var status: SessionStatus { connection.status(for: session) }
     private var isSending: Bool { connection.activeSessionOperations.contains("send:\(session.id)") }
@@ -189,7 +194,11 @@ private struct AgentSessionView: View {
             }
         }
         .fullScreenCover(item: $workspace.fullScreenImage) { ImageViewer(selection: $0) }
-        .task { connection.openSession(session) }
+        .task {
+            workspace = connection.workspaceNavigation(for: session.id)
+            connection.openSession(session)
+        }
+        .onChange(of: workspace) { connection.persistWorkspaceNavigation(workspace, for: session.id) }
         .onChange(of: connection.acceptedMessage?.id) {
             guard let accepted = connection.acceptedMessage, accepted.sessionId == session.id else { return }
             if input.trimmingCharacters(in: .whitespacesAndNewlines) == accepted.content { input = "" }
@@ -220,7 +229,7 @@ private struct AgentSessionView: View {
                         ForEach(connection.sessionFeedItems[session.id] ?? []) { item in
                             FeedBlock(item: item, session: session).id(item.id)
                         }
-                        if let error = connection.sessionErrors[session.id] {
+                        if let error = connection.sessionError(for: session.id) {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.red)
                                 .padding(12)

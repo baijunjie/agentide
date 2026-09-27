@@ -2,6 +2,8 @@
 
 > 目标：实现一个可实际跑通的 Mobile Agent IDE MVP。Mac 负责运行和连接本地 Agent Runtime，iOS 负责远程控制、会话交互与项目浏览，Server 负责设备配对、连接中继与消息路由。
 
+> 本大纲中需要人工执行的验收项，统一见 [MVP 人工验收清单](plans/20260922-移动端-Agent-IDE-MVP/人工验收清单.md)。
+
 ---
 
 ## 1. 产品定位

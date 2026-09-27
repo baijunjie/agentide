@@ -78,7 +78,7 @@ final class MobileConnectionScenarioTests: XCTestCase {
 
         connection.openSession(session)
         await connection.waitForScenarioIdle()
-        XCTAssertEqual(connection.sessionEvents[session.id]?.count, 5)
+        XCTAssertEqual(connection.sessionEvents[session.id]?.count, 6)
         XCTAssertEqual(connection.status(for: session), .waitingUser)
 
         connection.respondToApproval(
@@ -226,6 +226,150 @@ final class MobileConnectionScenarioTests: XCTestCase {
         await connection.waitForScenarioIdle()
 
         XCTAssertEqual(connection.projects.map(\.id), ["project-demo"])
+    }
+
+    func testChangesStatesCoverSuccessCleanNonGitAndBinary() async throws {
+        let comprehensive = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
+        await comprehensive.waitForScenarioIdle()
+        comprehensive.requestChanges(projectId: "project-demo")
+        await comprehensive.waitForScenarioIdle()
+        let changes = try XCTUnwrap(comprehensive.changes(projectId: "project-demo"))
+        XCTAssertTrue(changes.isGitRepository)
+        let binary = try XCTUnwrap(changes.changes.first(where: { $0.isBinary }))
+        comprehensive.requestDiff(projectId: "project-demo", change: binary)
+        await comprehensive.waitForScenarioIdle()
+        XCTAssertNil(try XCTUnwrap(comprehensive.diff(projectId: "project-demo", change: binary)).diff)
+
+        let clean = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .clean))
+        await clean.waitForScenarioIdle()
+        clean.requestChanges(projectId: "project-demo")
+        await clean.waitForScenarioIdle()
+        XCTAssertTrue(try XCTUnwrap(clean.changes(projectId: "project-demo")).changes.isEmpty)
+
+        let nonGit = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .notGit))
+        await nonGit.waitForScenarioIdle()
+        nonGit.requestChanges(projectId: "project-demo")
+        await nonGit.waitForScenarioIdle()
+        XCTAssertFalse(try XCTUnwrap(nonGit.changes(projectId: "project-demo")).isGitRepository)
+    }
+
+    func testChangesRefreshClearsDiffsAndCanRequestThemAgain() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        connection.requestChanges(projectId: "project-demo")
+        await connection.waitForScenarioIdle()
+        let change = try XCTUnwrap(connection.changes(projectId: "project-demo")?.changes.first)
+        connection.requestDiff(projectId: "project-demo", change: change)
+        await connection.waitForScenarioIdle()
+        XCTAssertNotNil(connection.diff(projectId: "project-demo", change: change))
+
+        connection.requestChanges(projectId: "project-demo")
+        XCTAssertNil(connection.diff(projectId: "project-demo", change: change))
+        await connection.waitForScenarioIdle()
+        connection.requestDiff(projectId: "project-demo", change: change)
+        await connection.waitForScenarioIdle()
+        XCTAssertNotNil(connection.diff(projectId: "project-demo", change: change))
+    }
+
+    func testDiffUsesResponseMetadataAndBinaryFailureCanRetry() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        connection.requestChanges(projectId: "project-demo")
+        await connection.waitForScenarioIdle()
+        let change = try XCTUnwrap(connection.changes(projectId: "project-demo")?.changes.first)
+        runtime.holdsDiffResponses = true
+        connection.requestDiff(projectId: "project-demo", change: change)
+        let id = try XCTUnwrap(runtime.requestIdsByType["project.readDiff"]?.last)
+        let response = try XCTUnwrap(runtime.response(for: id, type: "project.readDiff.response", payload: [
+            "change": runtime.change(path: change.relativePath, binary: true),
+        ]))
+        connection.injectScenarioInbound([response])
+        await connection.waitForScenarioIdle()
+        XCTAssertTrue(try XCTUnwrap(connection.diff(projectId: "project-demo", change: change)).change.isBinary)
+
+        let failedRuntime = MobileScenarioRuntime(scenario: .tooLarge)
+        let failed = MobileConnection(scenarioRuntime: failedRuntime)
+        await failed.waitForScenarioIdle()
+        failed.requestChanges(projectId: "project-demo")
+        await failed.waitForScenarioIdle()
+        let binary = try XCTUnwrap(failed.changes(projectId: "project-demo")?.changes.first)
+        failed.requestDiff(projectId: "project-demo", change: binary)
+        await failed.waitForScenarioIdle()
+        XCTAssertNotNil(failed.diffError(projectId: "project-demo", change: binary))
+        failed.requestDiff(projectId: "project-demo", change: binary)
+        await failed.waitForScenarioIdle()
+        XCTAssertEqual(failedRuntime.requestIdsByType["project.readDiff"]?.count, 2)
+    }
+
+    func testChangesListIdentityKeepsStagedAndUnstagedCopiesDistinct() throws {
+        let staged = try JSONDecoder().decode(GitChange.self, from: Data("""
+        {"relativePath":"Sources/App.swift","kind":"modified","area":"staged","isBinary":false}
+        """.utf8))
+        let unstaged = try JSONDecoder().decode(GitChange.self, from: Data("""
+        {"relativePath":"Sources/App.swift","kind":"modified","area":"unstaged","isBinary":false}
+        """.utf8))
+        XCTAssertNotEqual(ChangesListIdentifier.value(for: staged), ChangesListIdentifier.value(for: unstaged))
+    }
+
+    func testDiffFailuresRetainStructuredRetryableErrors() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .tooLarge)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        connection.requestChanges(projectId: "project-demo")
+        await connection.waitForScenarioIdle()
+        let change = try XCTUnwrap(connection.changes(projectId: "project-demo")?.changes.first)
+        connection.requestDiff(projectId: "project-demo", change: change)
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.diffError(projectId: "project-demo", change: change), .init(message: "Diff exceeds the transfer limit", code: "DIFF_TOO_LARGE"))
+
+        let failed = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .requestFailure))
+        await failed.waitForScenarioIdle()
+        failed.requestChanges(projectId: "project-demo")
+        await failed.waitForScenarioIdle()
+        XCTAssertEqual(failed.changesError(projectId: "project-demo"), .init(message: "Scenario request failure", code: "SCENARIO_FAILURE"))
+    }
+
+    func testChangesResponsesRejectStaleAndDiffResponsesRejectEachMismatchedField() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        runtime.holdsChangesResponses = true
+        connection.requestChanges(projectId: "project-demo")
+        connection.requestChanges(projectId: "project-demo")
+        let allIds = try XCTUnwrap(runtime.requestIdsByType["project.listChanges"])
+        XCTAssertGreaterThanOrEqual(allIds.count, 2)
+        let ids = Array(allIds.suffix(2))
+        let old = ids[ids.startIndex]
+        let newest = ids[ids.index(after: ids.startIndex)]
+        connection.injectScenarioInbound([try XCTUnwrap(runtime.respondToHeldChanges(newest, changes: [runtime.change(path: "new.swift")]))])
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.changes(projectId: "project-demo")?.changes.first?.relativePath, "new.swift")
+        XCTAssertEqual(connection.changesCompletion(projectId: "project-demo")?.generation, 2)
+        XCTAssertFalse(connection.isLoadingChanges(projectId: "project-demo"))
+        connection.injectScenarioInbound([try XCTUnwrap(runtime.respondToHeldChanges(old, changes: [runtime.change(path: "old.swift")]))])
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.changes(projectId: "project-demo")?.changes.first?.relativePath, "new.swift")
+        XCTAssertEqual(connection.changesCompletion(projectId: "project-demo")?.generation, 2)
+        XCTAssertFalse(connection.isLoadingChanges(projectId: "project-demo"))
+
+        let change = try XCTUnwrap(connection.changes(projectId: "project-demo")?.changes.first)
+        runtime.holdsDiffResponses = true
+        for mismatch in ["project", "path", "area"] {
+            connection.requestDiff(projectId: "project-demo", change: change)
+            let diffId = try XCTUnwrap(runtime.requestIdsByType["project.readDiff"]?.last)
+            var payload: [String: Any] = ["change": runtime.change(path: change.relativePath, area: change.area.rawValue), "diff": "@@ -1 +1 @@\n-x\n+y\n"]
+            if mismatch == "path" { payload["change"] = runtime.change(path: "other.swift", area: change.area.rawValue) }
+            if mismatch == "area" { payload["change"] = runtime.change(path: change.relativePath, area: "staged") }
+            let response = try XCTUnwrap(runtime.response(for: diffId, type: "project.readDiff.response", payload: payload))
+            var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: response) as? [String: Any])
+            if mismatch == "project" { object["projectId"] = "other-project" }
+            connection.injectScenarioInbound([try JSONSerialization.data(withJSONObject: object)])
+            await connection.waitForScenarioIdle()
+            XCTAssertNil(connection.diff(projectId: "project-demo", change: change))
+            XCTAssertEqual(connection.diffError(projectId: "project-demo", change: change)?.message, "Invalid response")
+        }
     }
 
     private func testSession(id: String, projectId: String = "project-demo") throws -> Session {

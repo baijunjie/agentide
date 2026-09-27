@@ -53,11 +53,18 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   const validateResponse = ajv.compile(await readJson(schemaUrl("response-envelope")));
   const validateAgentEvent = ajv.compile(await readJson(schemaUrl("agent-event")));
   const sharedSchema = await readJson(schemaUrl("shared-types"));
+  const gitChangesSchema = await readJson(schemaUrl("git-changes"));
   ajv.addSchema(sharedSchema);
   const validateSessionSnapshot = ajv.compile(await readJson(schemaUrl("session-snapshot")));
   const validateProject = ajv.getSchema(`${sharedSchema.$id}#/$defs/project`);
   const validateSession = ajv.getSchema(`${sharedSchema.$id}#/$defs/session`);
   const validateFileEntry = ajv.getSchema(`${sharedSchema.$id}#/$defs/fileEntry`);
+  ajv.addSchema(gitChangesSchema);
+  const validateGitChange = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/gitChange` });
+  const validateProjectChangesRequest = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectChangesRequest` });
+  const validateProjectChangesResponse = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectChangesResponse` });
+  const validateProjectDiffRequest = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectDiffRequest` });
+  const validateProjectDiffResponse = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectDiffResponse` });
   const validRequest = await readJson(fixtureUrl("valid-request"));
   const validResponse = await readJson(fixtureUrl("valid-response-no-payload"));
   const validNullResponse = await readJson(fixtureUrl("valid-response-null-payload"));
@@ -123,6 +130,21 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   assert.equal(validateProject(sharedTypes.project), true, JSON.stringify(validateProject.errors));
   assert.equal(validateSession(sharedTypes.session), true, JSON.stringify(validateSession.errors));
   assert.equal(validateFileEntry(sharedTypes.fileEntry), true, JSON.stringify(validateFileEntry.errors));
+
+  const gitChanges = await readJson(fixtureUrl("git-changes"));
+  assert.equal(validateProjectChangesRequest(gitChanges.projectChangesRequest), true);
+  assert.equal(validateProjectChangesResponse(gitChanges.projectChangesResponse), true);
+  assert.equal(validateProjectChangesResponse(gitChanges.nonGitProjectChangesResponse), true);
+  assert.equal(validateProjectDiffRequest(gitChanges.projectDiffRequest), true);
+  assert.equal(validateProjectDiffResponse(gitChanges.projectDiffResponse), true);
+  assert.equal(validateProjectDiffResponse(gitChanges.binaryProjectDiffResponse), true);
+  for (const change of gitChanges.projectChangesResponse.changes) {
+    assert.equal(validateGitChange(change), true, JSON.stringify(validateGitChange.errors));
+  }
+  assert.equal(validateGitChange(await readJson(fixtureUrl("git-changes-invalid-renamed-missing-previous-path"))), false);
+  assert.equal(validateGitChange(await readJson(fixtureUrl("git-changes-invalid-previous-path-on-modified"))), false);
+  assert.equal(validateGitChange(await readJson(fixtureUrl("git-changes-invalid-extra-field"))), false);
+  assert.equal(validateProjectDiffResponse(await readJson(fixtureUrl("git-changes-invalid-binary-diff"))), false);
 
   assert.equal(
     validateSessionSnapshot(await readJson(fixtureUrl("session-snapshot"))),

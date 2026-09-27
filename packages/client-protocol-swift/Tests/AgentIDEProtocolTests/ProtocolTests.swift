@@ -162,6 +162,40 @@ private func fixture(named name: String) throws -> Data {
     #expect(models.fileEntry.type == .file)
 }
 
+@Test func gitChangesFixturesEnforceDTOBoundaries() throws {
+    struct Fixtures: Decodable {
+        let projectChangesResponse: ProjectChangesResponse
+        let nonGitProjectChangesResponse: ProjectChangesResponse
+        let projectDiffRequest: ProjectDiffRequest
+        let projectDiffResponse: ProjectDiffResponse
+        let binaryProjectDiffResponse: ProjectDiffResponse
+    }
+
+    let fixtures = try JSONDecoder().decode(Fixtures.self, from: fixture(named: "git-changes"))
+    #expect(fixtures.projectChangesResponse.changes.map(\.kind) == [
+        .added, .modified, .deleted, .renamed, .untracked,
+    ])
+    #expect(fixtures.projectChangesResponse.changes[3].previousRelativePath == "src/old-name.ts")
+    #expect(fixtures.nonGitProjectChangesResponse.changes.isEmpty)
+    #expect(fixtures.projectDiffRequest.area == .unstaged)
+    #expect(fixtures.projectDiffResponse.diff != nil)
+    #expect(fixtures.binaryProjectDiffResponse.diff == nil)
+
+    let decoder = JSONDecoder()
+    for name in [
+        "git-changes-invalid-renamed-missing-previous-path",
+        "git-changes-invalid-previous-path-on-modified",
+        "git-changes-invalid-extra-field",
+    ] {
+        #expect(throws: (any Error).self) {
+            _ = try decoder.decode(GitChange.self, from: fixture(named: name))
+        }
+    }
+    #expect(throws: (any Error).self) {
+        _ = try decoder.decode(ProjectDiffResponse.self, from: fixture(named: "git-changes-invalid-binary-diff"))
+    }
+}
+
 @Test func sessionSnapshotFixturePreservesAllPendingInteractions() throws {
     let decoder = JSONDecoder()
     let snapshot = try decoder.decode(SessionSnapshot.self, from: fixture(named: "session-snapshot"))

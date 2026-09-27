@@ -9,6 +9,7 @@
 
 // Binary payloads are base64-wrapped in a 1 MiB Relay frame, so raw reads need headroom for the envelope.
 #define MAX_READ_BYTES (700 * 1024)
+#define READ_TOO_LARGE (-2)
 
 static int forbidden_component(const char *name) {
   return strcmp(name, "") == 0 || strcmp(name, ".") == 0 || strcmp(name, "..") == 0 ||
@@ -87,18 +88,18 @@ static int read_file(int directory, const char *name) {
     return -1;
   }
   if (metadata.st_size > MAX_READ_BYTES) {
-    errno = EFBIG;
     close(file);
-    return -1;
+    return READ_TOO_LARGE;
   }
   char buffer[65536];
   ssize_t count;
   size_t total = 0;
   while ((count = read(file, buffer, sizeof(buffer))) > 0) {
+    if (fstat(file, &metadata) != 0) { close(file); return -1; }
+    if (metadata.st_size > MAX_READ_BYTES) { close(file); return READ_TOO_LARGE; }
     if ((size_t)count > MAX_READ_BYTES - total) {
-      errno = EFBIG;
       close(file);
-      return -1;
+      return READ_TOO_LARGE;
     }
     if (fwrite(buffer, 1, (size_t)count, stdout) != (size_t)count) { close(file); return -1; }
     total += (size_t)count;
@@ -109,8 +110,40 @@ static int read_file(int directory, const char *name) {
   return count < 0 ? -1 : 0;
 }
 
+static int stat_file(int directory, const char *name) {
+  if (forbidden_component(name)) { errno = EACCES; return -1; }
+  struct stat metadata;
+  if (fstatat(directory, name, &metadata, AT_SYMLINK_NOFOLLOW) != 0) return -1;
+  char kind = S_ISREG(metadata.st_mode) ? 'F' : S_ISLNK(metadata.st_mode) ? 'L' : 'O';
+  return printf("%c\t%lld\n", kind, (long long)metadata.st_size) < 0 ? -1 : 0;
+}
+
+static int inspect_file(int directory, const char *name) {
+  if (forbidden_component(name)) { errno = EACCES; return -1; }
+  int file = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (file < 0) return -1;
+  struct stat metadata;
+  if (fstat(file, &metadata) != 0 || !S_ISREG(metadata.st_mode)) { close(file); return -1; }
+  char buffer[8192]; ssize_t count = read(file, buffer, sizeof(buffer)); int binary = 0;
+  if (count < 0) { close(file); return -1; }
+  for (ssize_t index = 0; index < count; index += 1) if (buffer[index] == '\0') { binary = 1; break; }
+  close(file);
+  return printf("F\t%lld\t%d\n", (long long)metadata.st_size, binary) < 0 ? -1 : 0;
+}
+
 int main(int argc, char **argv) {
-  if (argc != 4 || (strcmp(argv[1], "list") != 0 && strcmp(argv[1], "read") != 0)) return 64;
+  if (argc >= 4 && strcmp(argv[1], "git-run") == 0) {
+    int root = open_root(argv[2]);
+    if (root < 0 || fchdir(root) != 0) { perror("project root"); if (root >= 0) close(root); return 1; }
+    close(root);
+    char **git_argv = calloc((size_t)argc - 1, sizeof(char *));
+    if (git_argv == NULL) return 1;
+    git_argv[0] = "/usr/bin/git";
+    for (int index = 3; index < argc; index += 1) git_argv[index - 2] = argv[index];
+    execv("/usr/bin/git", git_argv);
+    perror("git"); free(git_argv); return 1;
+  }
+  if (argc != 4 || (strcmp(argv[1], "list") != 0 && strcmp(argv[1], "read") != 0 && strcmp(argv[1], "stat") != 0 && strcmp(argv[1], "inspect") != 0)) return 64;
   int root = open_root(argv[2]);
   if (root < 0) { perror("project root"); return 1; }
   char *path = strdup(argv[3]);
@@ -125,10 +158,21 @@ int main(int argc, char **argv) {
     if (name == NULL) { name = path; parentPath = path + strlen(path); }
     else { *name = '\0'; name += 1; }
     int directory = walk_directories(root, parentPath, 1);
-    if (directory >= 0) { result = read_file(directory, name); close(directory); }
+    if (directory >= 0) {
+      result = strcmp(argv[1], "read") == 0 ? read_file(directory, name) : strcmp(argv[1], "inspect") == 0 ? inspect_file(directory, name) : stat_file(directory, name);
+      int operation_errno = errno;
+      close(directory);
+      errno = operation_errno;
+    }
   }
-  if (result != 0) perror("file access");
+  int saved_errno = errno;
+  if (result != 0) { errno = saved_errno; perror("file access"); }
   free(path);
   close(root);
-  return result == 0 ? 0 : 1;
+  if (result == 0) return 0;
+  if (result == READ_TOO_LARGE) return 10;
+  if (saved_errno == EFBIG) return 10;
+  if (saved_errno == ENOENT) return 11;
+  if (saved_errno == ELOOP) return 12;
+  return 1;
 }

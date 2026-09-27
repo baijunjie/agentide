@@ -13,7 +13,7 @@
 - payload：`WirePayload`、`EncryptedPayload`。
 - 校验器：`isMessageType()`、`isEncryptedPayload()`、`isEnvelope()`、`isProtocolTimestamp()`。
 
-`schema/` 提供 Envelope、响应、Agent 事件和共享业务对象的 Draft 2020-12 Schema。Envelope 与 Agent 事件的正反例 `fixtures/` 同时被 TypeScript 与 Swift 测试消费，用于固定跨语言的接受与拒绝行为；共享业务对象目前只用正例 fixture 验证 Schema 与 Swift DTO 的共同解码。
+`schema/` 提供 Envelope、响应、Agent 事件和共享业务对象的 Draft 2020-12 Schema，其中 `git-changes.schema.json` 约束 Changes/Diff 请求响应及字段组合。Envelope、Agent 事件和 Git Changes/Diff 的正反例 `fixtures/` 同时被 TypeScript 与 Swift 测试消费，用于固定跨语言的接受与拒绝行为；其余共享业务对象目前只用正例 fixture 验证 Schema 与 Swift DTO 的共同解码。
 
 ### `AgentIDEProtocol`
 
@@ -22,7 +22,7 @@
 对外接口：
 
 - 协议封装：`ProtocolVersion`、`MessageType`、`Envelope`、`ResponseEnvelope`、`ProtocolError`、`WirePayload`、`EncryptedPayload`、`JSONValue`、`EmptyPayload`。
-- 共享对象：`AgentType`、`SessionStatus`、`Project`、`Session`、`FileEntry`。
+- 共享对象：`AgentType`、`SessionStatus`、`Project`、`Session`、`FileEntry`、`GitChangeKind`、`GitChangeArea`、`GitChange`、`ProjectChangesResponse`、`ProjectDiffRequest`、`ProjectDiffResponse`。
 - Agent 事件：`AgentEvent`、13 个具体事件 DTO、`ApprovalAction` 与 `QuestionOption`。
 
 Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“显式 null”；未解释的 JSON payload 通过 `JSONValue` 往返，不能用普通 Swift 可选值吞掉显式 null。
@@ -31,7 +31,7 @@ Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“�
 
 ### `@agentide/shared-types`
 
-该包只导出 TypeScript 静态类型，不提供 `Project`、`Session` 或 `FileEntry` 的运行时守卫；运行时结构约束由 `@agentide/protocol` 中的 JSON Schema 描述，调用方需要通过 Schema validator 执行校验。
+该包只导出 TypeScript 静态类型，不提供共享领域对象的运行时守卫；运行时结构约束由 `@agentide/protocol` 中的 JSON Schema 描述，调用方需要通过 Schema validator 执行校验。
 
 对外接口：
 
@@ -39,6 +39,8 @@ Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“�
 - `Project`：本地项目元数据与启用的 Agent。
 - `SessionStatus`、`Session`：统一会话状态与 Agent 原生会话标识。
 - `FileEntry`：项目内文件或目录的相对路径元数据。
+- `GitChangeKind`、`GitChangeArea`、`GitChange`、`RenamedGitChange`、`NonRenamedGitChange`：工作树变更类型、区域和字段组合。
+- `ProjectChangesResponse`、`ProjectDiffRequest`、`ProjectDiffResponse`：项目 Changes 列表和受限统一 diff 的请求响应对象。
 
 ### `@agentide/agent-core`
 

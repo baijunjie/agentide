@@ -7,6 +7,7 @@ export {
   type RelayClientOptions,
 } from "./relay-client.js";
 export { LocalFileService } from "./file-service.js";
+export { LocalGitService, GitServiceError, type GitArea } from "./git-service.js";
 export { createAgentHostServer } from "./ipc-server.js";
 export { ProjectStore } from "./project-store.js";
 export { SessionManager, type CreateManagedSession } from "./session-manager.js";

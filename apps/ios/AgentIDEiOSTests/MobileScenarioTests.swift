@@ -27,7 +27,7 @@ final class MobileScenarioTests: XCTestCase {
 
         let snapshot = try response(runtime, type: "session.getSnapshot", id: "request-snapshot", projectId: "project-demo", sessionId: "session-demo")
         let decodedSnapshot = try decodePayload(snapshot, as: SessionSnapshot.self)
-        XCTAssertEqual(decodedSnapshot.recentEvents.count, 5)
+        XCTAssertEqual(decodedSnapshot.recentEvents.count, 6)
         XCTAssertEqual(decodedSnapshot.pendingInteractions.count, 2)
 
         let files = try response(runtime, type: "project.listFiles", id: "request-files", projectId: "project-demo", payload: ["relativePath": ""])
@@ -51,7 +51,7 @@ final class MobileScenarioTests: XCTestCase {
             _ = try JSONDecoder().decode(Envelope<JSONValue>.self, from: data)
             return try decodePayload(object(data), as: AgentEvent.self)
         }
-        XCTAssertEqual(events.last?.sequence, 9)
+        XCTAssertEqual(events.last?.sequence, 10)
         XCTAssertTrue(runtime.drain().isEmpty)
     }
 
@@ -90,7 +90,87 @@ final class MobileScenarioTests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         XCTAssertTrue(timestamps.allSatisfy { formatter.date(from: $0) != nil })
-        XCTAssertEqual(timestamps.last, "2026-09-27T00:01:04.000Z")
+        XCTAssertEqual(timestamps.last, "2026-09-27T00:01:05.000Z")
+    }
+
+    func testChangesScenariosExposeMixedEmptyAndBinaryStates() throws {
+        let comprehensive = MobileScenarioRuntime(scenario: .comprehensive)
+        let changes = try response(comprehensive, type: "project.listChanges", id: "changes", projectId: "project-demo")
+        let decoded = try decodePayload(changes, as: ProjectChangesResponse.self)
+        XCTAssertEqual(decoded.changes.count, 3)
+        XCTAssertTrue(decoded.changes.contains { $0.isBinary })
+
+        let clean = MobileScenarioRuntime(scenario: .clean)
+        let cleanResponse = try response(clean, type: "project.listChanges", id: "clean", projectId: "project-demo")
+        XCTAssertTrue(try decodePayload(cleanResponse, as: ProjectChangesResponse.self).changes.isEmpty)
+
+        let parser = DiffParser.parse("@@ -2,2 +2,3 @@\n-old\n+new\n keep\n")
+        XCTAssertEqual(parser[1], .init(text: "-old", oldLine: 2, newLine: nil))
+        XCTAssertEqual(parser[2], .init(text: "+new", oldLine: nil, newLine: 2))
+        XCTAssertEqual(parser[3], .init(text: " keep", oldLine: 3, newLine: 3))
+        XCTAssertEqual(parser.count, 4)
+        XCTAssertEqual(parser.last, .init(text: " keep", oldLine: 3, newLine: 3))
+
+        let noNewline = DiffParser.parse("@@ -1 +1 @@\n-old\n+new\n\\ No newline at end of file\n keep\n")
+        XCTAssertEqual(noNewline[3], .init(text: "\\ No newline at end of file", oldLine: nil, newLine: nil))
+        XCTAssertEqual(noNewline[4], .init(text: " keep", oldLine: 2, newLine: 2))
+    }
+
+    func testChangesWorkspaceReturnsThroughDiffAndRoundTripsRecovery() throws {
+        let change = try JSONDecoder().decode(GitChange.self, from: Data("""
+        {"relativePath":"Sources/App.swift","kind":"modified","area":"unstaged","isBinary":false,"oldSize":1,"newSize":2}
+        """.utf8))
+        var state = WorkspaceNavigationState()
+        state.showChanges()
+        state.prepareDiff(change)
+        state.activatePreparedDiff()
+        XCTAssertEqual(state.level, .diff(change))
+        XCTAssertEqual(try JSONDecoder().decode(WorkspaceNavigationState.self, from: JSONEncoder().encode(state)), state)
+        XCTAssertTrue(WorkspaceChangesRestore.needsRefresh(for: state.level))
+        state.goBack()
+        XCTAssertEqual(state.level, .changes)
+        XCTAssertTrue(WorkspaceChangesRestore.needsRefresh(for: state.level))
+        state.goBack()
+        XCTAssertEqual(state.level, .session)
+        XCTAssertFalse(WorkspaceChangesRestore.needsRefresh(for: state.level))
+    }
+
+    func testChangedFileNavigationCoordinatorConsumesOnlyMatchingResults() throws {
+        let change = try JSONDecoder().decode(GitChange.self, from: Data("""
+        {"relativePath":"Sources/App.swift","kind":"modified","area":"unstaged","isBinary":false}
+        """.utf8))
+        let response = try JSONDecoder().decode(ProjectChangesResponse.self, from: Data("""
+        {"isGitRepository":true,"changes":[{"relativePath":"Sources/App.swift","kind":"modified","area":"unstaged","isBinary":false}]}
+        """.utf8))
+        var coordinator = ChangedFileNavigationCoordinator()
+        coordinator.begin(path: change.relativePath, generation: 2)
+        XCTAssertNil(coordinator.consume(
+            completion: .init(generation: 1, outcome: .succeeded),
+            response: response
+        ))
+        XCTAssertNotNil(coordinator.pending)
+        XCTAssertEqual(coordinator.consume(
+            completion: .init(generation: 2, outcome: .succeeded),
+            response: response
+        ), change)
+        XCTAssertNil(coordinator.pending)
+
+        coordinator.begin(path: change.relativePath, generation: 3)
+        let clean = try JSONDecoder().decode(ProjectChangesResponse.self, from: Data("""
+        {"isGitRepository":true,"changes":[]}
+        """.utf8))
+        XCTAssertNil(coordinator.consume(
+            completion: .init(generation: 3, outcome: .succeeded),
+            response: clean
+        ))
+        XCTAssertNil(coordinator.pending)
+
+        coordinator.begin(path: change.relativePath, generation: 4)
+        XCTAssertNil(coordinator.consume(
+            completion: .init(generation: 4, outcome: .failed(.init(message: "Unavailable"))),
+            response: nil
+        ))
+        XCTAssertNil(coordinator.pending)
     }
 
     private func response(_ runtime: MobileScenarioRuntime, type: String, id: String, projectId: String? = nil, sessionId: String? = nil, payload: [String: Any] = [:]) throws -> [String: Any] {

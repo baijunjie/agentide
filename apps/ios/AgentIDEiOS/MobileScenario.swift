@@ -7,6 +7,10 @@ enum MobileScenario: String, CaseIterable {
     case requestFailure = "request-failure"
     case timeout
     case invalidResponse = "invalid-response"
+    case clean
+    case notGit = "not-git"
+    case binary
+    case tooLarge = "too-large"
 
     static func fromLaunchArguments(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> MobileScenario? {
 #if DEBUG
@@ -47,6 +51,11 @@ final class MobileScenarioRuntime {
     private var pendingInteractions: [String: [[String: Any]]]
     private var deferredInbound: [Data] = []
     private(set) var sentMessages: [ScenarioSentMessage] = []
+    private var heldChangesRequests: [String: [String: Any]] = [:]
+    private var requests: [String: [String: Any]] = [:]
+    private(set) var requestIdsByType: [String: [String]] = [:]
+    var holdsChangesResponses = false
+    var holdsDiffResponses = false
 
     let presence: MobileScenarioPresence
 
@@ -65,7 +74,8 @@ final class MobileScenarioRuntime {
             Self.event(id: "event-1", sessionId: "session-demo", sequence: 1, type: "message", extra: ["role": "agent", "content": "I inspected the workspace and need approval before continuing.", "format": "markdown"]),
             Self.event(id: "event-2", sessionId: "session-demo", sequence: 2, type: "status", extra: ["status": "waiting_user", "message": "Waiting for simulator input"]),
             Self.event(id: "event-3", sessionId: "session-demo", sequence: 3, type: "question.requested", extra: ["interactionId": "question-demo", "question": "Which follow-up should run?", "options": [["id": "tests", "label": "Run tests"], ["id": "review", "label": "Review changes"]], "allowFreeText": true]),
-            Self.event(id: "event-4", sessionId: "session-demo", sequence: 4, type: "approval.requested", extra: ["interactionId": "approval-demo", "title": "Run tests", "actions": ["approve_once", "reject"]])
+            Self.event(id: "event-4", sessionId: "session-demo", sequence: 4, type: "approval.requested", extra: ["interactionId": "approval-demo", "title": "Run tests", "actions": ["approve_once", "reject"]]),
+            Self.event(id: "event-5", sessionId: "session-demo", sequence: 5, type: "file.changed", extra: ["relativePath": "Sources/App.swift", "change": "modified"])
         ]
         events = ["session-demo": initialEvents]
         pendingInteractions = ["session-demo": [initialEvents[4], initialEvents[3]]]
@@ -84,6 +94,13 @@ final class MobileScenarioRuntime {
               let requestId = request["id"] as? String else {
             return []
         }
+        requestIdsByType[type, default: []].append(requestId)
+        requests[requestId] = request
+        if type == "project.listChanges", holdsChangesResponses {
+            heldChangesRequests[requestId] = request
+            return []
+        }
+        if type == "project.readDiff", holdsDiffResponses { return [] }
         if scenario == .offline {
             return [failure(for: request, type: "\(type).response", replyTo: requestId, code: "MAC_OFFLINE", message: "Mac is offline")]
         }
@@ -172,6 +189,24 @@ final class MobileScenarioRuntime {
             let path = ((request["payload"] as? [String: Any])?["relativePath"] as? String) ?? "assets/logo.png"
             let image = file(name: "logo.png", path: path, image: true)
             return [success(for: request, type: "project.listImages.response", replyTo: requestId, payload: ["current": image, "siblings": [image]])]
+        case "project.listChanges":
+            let changes: [[String: Any]] = scenario == .clean || scenario == .notGit ? [] : [
+                gitChange(path: "Sources/App.swift", kind: "modified", area: "unstaged"),
+                gitChange(path: "README.md", kind: "added", area: "staged"),
+                gitChange(path: "assets/logo.png", kind: "modified", area: "unstaged", binary: true),
+            ]
+            return [success(for: request, type: "project.listChanges.response", replyTo: requestId, payload: ["isGitRepository": scenario != .notGit, "changes": changes])]
+        case "project.readDiff":
+            let payload = request["payload"] as? [String: Any] ?? [:]
+            let path = payload["relativePath"] as? String ?? "Sources/App.swift"
+            let area = payload["area"] as? String ?? "unstaged"
+            if scenario == .tooLarge { return [failure(for: request, type: "project.readDiff.response", replyTo: requestId, code: "DIFF_TOO_LARGE", message: "Diff exceeds the transfer limit")] }
+            let binary = scenario == .binary || path == "assets/logo.png"
+            let change = gitChange(path: path, kind: path == "README.md" ? "added" : "modified", area: area, binary: binary)
+            let diff = binary ? nil : "diff --git a/\(path) b/\(path)\n@@ -1,2 +1,3 @@\n-old line\n+new line\n unchanged\n+another line\n"
+            var response: [String: Any] = ["change": change]
+            if let diff { response["diff"] = diff }
+            return [success(for: request, type: "project.readDiff.response", replyTo: requestId, payload: response)]
         case "agent.event.ack":
             return []
         default:
@@ -182,6 +217,21 @@ final class MobileScenarioRuntime {
     func drain() -> [Data] {
         defer { deferredInbound = [] }
         return deferredInbound
+    }
+
+    func respondToHeldChanges(_ requestId: String, changes: [[String: Any]], isGitRepository: Bool = true) -> Data? {
+        guard let request = heldChangesRequests.removeValue(forKey: requestId) else { return nil }
+        return success(for: request, type: "project.listChanges.response", replyTo: requestId,
+                       payload: ["isGitRepository": isGitRepository, "changes": changes])
+    }
+
+    func change(path: String, area: String = "unstaged", binary: Bool = false) -> [String: Any] {
+        gitChange(path: path, kind: "modified", area: area, binary: binary)
+    }
+
+    func response(for requestId: String, type: String, payload: [String: Any]) -> Data? {
+        guard let request = requests[requestId] else { return nil }
+        return success(for: request, type: type, replyTo: requestId, payload: payload)
     }
 
     private func project() -> [String: Any] {
@@ -257,6 +307,10 @@ final class MobileScenarioRuntime {
 
     private func directory(name: String, path: String) -> [String: Any] {
         ["name": name, "relativePath": path, "type": "directory"]
+    }
+
+    private func gitChange(path: String, kind: String, area: String, binary: Bool = false) -> [String: Any] {
+        ["relativePath": path, "kind": kind, "area": area, "isBinary": binary, "oldSize": binary ? 8 : 24, "newSize": binary ? 12 : 30]
     }
 
     private static func session(id: String, status: String, title: String = "Scenario approval") -> [String: Any] {

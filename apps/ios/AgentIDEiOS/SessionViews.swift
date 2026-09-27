@@ -1,6 +1,40 @@
 import AgentIDEProtocol
 import SwiftUI
 
+enum WorkspaceChangesRestore {
+    static func needsRefresh(for level: WorkspaceLevel) -> Bool {
+        switch level {
+        case .changes, .diff:
+            true
+        case .session, .browser, .file:
+            false
+        }
+    }
+}
+
+struct ChangedFileNavigationCoordinator: Equatable {
+    struct Pending: Equatable {
+        let path: String
+        let generation: Int
+    }
+
+    private(set) var pending: Pending?
+
+    mutating func begin(path: String, generation: Int) {
+        pending = .init(path: path, generation: generation)
+    }
+
+    mutating func consume(
+        completion: ChangesRequestCompletion?,
+        response: ProjectChangesResponse?
+    ) -> GitChange? {
+        guard let pending, completion?.generation == pending.generation else { return nil }
+        self.pending = nil
+        guard case .succeeded = completion?.outcome else { return nil }
+        return response?.changes.first { $0.relativePath == pending.path }
+    }
+}
+
 extension AgentEvent {
     var sequence: Int {
         switch self {
@@ -62,6 +96,9 @@ struct SessionListView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 NavigationLink { FileBrowserView(project: project) } label: { Image(systemName: "folder") }
                     .accessibilityLabel("Browse files")
+                NavigationLink { ChangesView(project: project) } label: { Image(systemName: "arrow.triangle.branch") }
+                    .accessibilityLabel("Changes")
+                    .accessibilityIdentifier("session-list-changes")
                 Button { creating = true } label: { Image(systemName: "plus") }
                     .accessibilityLabel("Create session")
                     .disabled(!connection.online || project.enabledAgents.isEmpty)
@@ -150,6 +187,7 @@ private struct AgentSessionView: View {
     let project: RemoteProject
     let session: Session
     @State private var workspace = WorkspaceNavigationState()
+    @State private var changedFileNavigation = ChangedFileNavigationCoordinator()
 
     init(project: RemoteProject, session: Session) {
         self.project = project
@@ -180,19 +218,42 @@ private struct AgentSessionView: View {
             )
         } fileContent: { selection in
             TextFileViewer(selection: selection, sendToAgent: addReferenceToDraft)
+        } changesContent: {
+            ChangesWorkspaceContent(project: project) { change in
+                workspace.prepareDiff(change)
+                Task { @MainActor in
+                    await Task.yield()
+                    withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
+                        workspace.activatePreparedDiff()
+                    }
+                }
+            }
+        } diffContent: { change in
+            DiffViewer(project: project, change: change)
         }
         .navigationTitle(workspaceTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
-                        workspace.showBrowser()
-                    }
-                } label: { Image(systemName: "folder") }
-                .accessibilityLabel("Browse files")
-                .accessibilityIdentifier("session-browse-files")
-                .disabled(workspace.level != .session)
+                HStack {
+                    Button {
+                        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
+                            workspace.showBrowser()
+                        }
+                    } label: { Image(systemName: "folder") }
+                    .accessibilityLabel("Browse files")
+                    .accessibilityIdentifier("session-browse-files")
+                    .disabled(workspace.level != .session)
+                    Button {
+                        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
+                            workspace.showChanges()
+                        }
+                        connection.requestChanges(projectId: project.id)
+                    } label: { Image(systemName: "arrow.triangle.branch") }
+                        .accessibilityLabel("Changes")
+                        .accessibilityIdentifier("session-changes")
+                        .disabled(workspace.level != .session)
+                }
             }
             if workspace.level == .session {
                 ToolbarItem(placement: .principal) { StatusBadge(status: status) }
@@ -204,8 +265,14 @@ private struct AgentSessionView: View {
         .task {
             workspace = connection.workspaceNavigation(for: session.id)
             connection.openSession(session)
+            if WorkspaceChangesRestore.needsRefresh(for: workspace.level) {
+                connection.requestChanges(projectId: project.id)
+            }
         }
         .onChange(of: workspace) { connection.persistWorkspaceNavigation(workspace, for: session.id) }
+        .onChange(of: connection.changesCompletion(projectId: project.id)) { _, completion in
+            completeChangedFileNavigation(completion)
+        }
     }
 
     private var workspaceTitle: String {
@@ -213,6 +280,8 @@ private struct AgentSessionView: View {
         case .session: session.title
         case .browser: project.name
         case let .file(selection): selection.name
+        case .changes: "Changes"
+        case let .diff(change): change.relativePath
         }
     }
 
@@ -230,7 +299,7 @@ private struct AgentSessionView: View {
                             }
                         }
                         ForEach(connection.sessionFeedItems[session.id] ?? []) { item in
-                            FeedBlock(item: item, session: session).id(item.id)
+                            FeedBlock(item: item, session: session, project: project, openChangedFile: openChangedFile).id(item.id)
                         }
                         if let error = connection.sessionError(for: session.id) {
                             Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -283,12 +352,32 @@ private struct AgentSessionView: View {
             workspace.returnToSession()
         }
     }
+
+    private func openChangedFile(_ relativePath: String) {
+        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) { workspace.showChanges() }
+        changedFileNavigation.begin(path: relativePath, generation: connection.requestChanges(projectId: project.id))
+        Task { @MainActor in
+            await Task.yield()
+            completeChangedFileNavigation(connection.changesCompletion(projectId: project.id))
+        }
+    }
+
+    private func completeChangedFileNavigation(_ completion: ChangesRequestCompletion?) {
+        guard let change = changedFileNavigation.consume(
+            completion: completion,
+            response: connection.changes(projectId: project.id)
+        ) else { return }
+        workspace.prepareDiff(change)
+        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) { workspace.activatePreparedDiff() }
+    }
 }
 
 private struct FeedBlock: View {
     @EnvironmentObject private var connection: MobileConnection
     let item: FeedItem
     let session: Session
+    let project: RemoteProject
+    let openChangedFile: (String) -> Void
 
     @ViewBuilder var body: some View {
         switch item.content {
@@ -303,7 +392,12 @@ private struct FeedBlock: View {
             case let .questionRequested(value): QuestionBlock(event: value, session: session, historicallyResolved: connection.isHistoricallyResolved(sessionId: session.id, interactionId: value.interactionId))
             case let .error(value): NoticeBlock(icon: "exclamationmark.triangle.fill", title: value.message, detail: value.code, color: .red)
             case let .status(value): NoticeBlock(icon: "circle.dotted", title: value.message ?? value.status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized, detail: nil, color: .secondary)
-            case let .fileChanged(value): NoticeBlock(icon: "doc.badge.gearshape", title: value.relativePath, detail: value.change.rawValue.capitalized, color: .orange)
+            case let .fileChanged(value):
+                Button { openChangedFile(value.relativePath) } label: {
+                    NoticeBlock(icon: "doc.badge.gearshape", title: value.relativePath, detail: value.change.rawValue.capitalized, color: .orange)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("file-changed-\(value.relativePath)")
             case let .turnCompleted(value): NoticeBlock(icon: "checkmark.circle", title: "Turn \(value.outcome.rawValue)", detail: nil, color: outcomeColor(value.outcome.rawValue))
             case let .sessionCompleted(value): NoticeBlock(icon: "checkmark.seal", title: "Session \(value.outcome.rawValue)", detail: nil, color: outcomeColor(value.outcome.rawValue))
             case .sessionStarted: NoticeBlock(icon: "play.circle", title: "Session started", detail: nil, color: .green)

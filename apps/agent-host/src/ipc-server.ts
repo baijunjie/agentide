@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { LocalFileService } from "./file-service.js";
+import { GitServiceError, LocalGitService } from "./git-service.js";
 import { ProjectStore } from "./project-store.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -13,14 +14,15 @@ export function createAgentHostServer(
   options: AgentHostServerOptions = {},
 ) {
   const files = new LocalFileService(projects);
+  const git = new LocalGitService(projects);
   return createServer((request, response) => {
     if (!isAuthorized(request, options.authenticationToken)) {
       sendJSON(response, 401, { error: "Unauthorized" });
       return;
     }
-    void route(request, response, projects, files, sessions).catch((error: unknown) => {
+    void route(request, response, projects, files, git, sessions).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Unexpected error";
-      sendJSON(response, statusFor(message), { error: message });
+      sendJSON(response, statusFor(error), { error: message, code: errorCode(error) });
     });
   });
 }
@@ -35,6 +37,7 @@ async function route(
   response: ServerResponse,
   projects: ProjectStore,
   files: LocalFileService,
+  git: LocalGitService,
   sessions: SessionManager,
 ): Promise<void> {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -151,6 +154,20 @@ async function route(
     return;
   }
 
+  const gitMatch = /^\/projects\/([^/]+)\/(changes|diff)$/.exec(url.pathname);
+  if (gitMatch !== null && request.method === "POST") {
+    const projectId = decodeURIComponent(gitMatch[1] ?? "");
+    if (gitMatch[2] === "changes") {
+      sendJSON(response, 200, await git.listChanges(projectId));
+    } else {
+      const body = await readJSON(request);
+      const area = requireString(body, "area");
+      if (area !== "staged" && area !== "unstaged") throw new Error("area must be staged or unstaged");
+      sendJSON(response, 200, await git.readDiff(projectId, requireString(body, "relativePath"), area));
+    }
+    return;
+  }
+
   sendJSON(response, 404, { error: "Not found" });
 }
 
@@ -190,11 +207,19 @@ function optionalStringArray(body: Record<string, unknown>, key: string): string
   return value;
 }
 
-function statusFor(message: string): number {
+function statusFor(error: unknown): number {
+  if (error instanceof GitServiceError && error.code === "git_timeout") return 408;
+  if (error instanceof GitServiceError && error.code === "git_output_too_large") return 413;
+  if (error instanceof GitServiceError && error.code === "git_busy") return 503;
+  const message = error instanceof Error ? error.message : "";
   if (message === "Project not found" || message === "Session not found") return 404;
   if (message === "Project is already registered") return 409;
   if (message.includes("ENOENT")) return 404;
   return 400;
+}
+
+function errorCode(error: unknown): string {
+  return error instanceof GitServiceError ? error.code : "request_failed";
 }
 
 function sendJSON(response: ServerResponse, status: number, value: unknown): void {

@@ -7,5 +7,6 @@
 - [Agent 会话执行与事件投递](product/agent-sessions.md)：会话生命周期、Claude/Codex 执行、Agent Host 持久化、iPhone 会话交互与可靠重放规则。
 - [设备配对与 Relay 连接](product/device-pairing.md)：Mac 与 iPhone 的设备身份、配对、鉴权、在线状态、路由、撤销和重连规则。
 - [项目登记与文件浏览](product/project-files.md)：Mac 项目登记、远程项目元数据、iPhone 文件树与只读文件查看交互，以及项目根目录沙箱规则。
+- [Git 变更与统一 Diff 审查](product/git-changes.md)：iPhone 的 Changes 列表、Diff Viewer、`file.changed` 深链以及 Agent Host 只读 Git 查询边界。
 - [应用模块](../apps/README.md)：macOS、iOS、Relay Server 与 Agent Host 的入口和对外接口。
 - [共享包](../packages/README.md)：TypeScript 与 Swift 共享能力的职责、导出接口和跨语言一致性约束。

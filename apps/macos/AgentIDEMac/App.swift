@@ -194,6 +194,36 @@ final class MacConnection: ObservableObject {
                 sendResponse(to: source, replyTo: requestId, type: "project.listImages.response", projectId: projectId,
                              payload: ["current": currentValue, "siblings": siblingValues])
             } catch { sendResponse(to: source, replyTo: requestId, type: "project.listImages.response", projectId: projectId, error: error.localizedDescription) }
+        } else if type == "project.listChanges" {
+            guard let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any], payload.isEmpty else {
+                sendResponse(to: source, replyTo: requestId, type: "project.listChanges.response", error: "Invalid project.listChanges request")
+                return
+            }
+            do {
+                let changes: ProjectChangesResponse = try await hostRequest("/projects/\(projectId)/changes", method: "POST", body: EmptyResponse())
+                let value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(changes))
+                guard let payload = value as? [String: Any] else { throw NSError(domain: "AgentIDE", code: 500, userInfo: [NSLocalizedDescriptionKey: "Invalid changes response"]) }
+                sendResponse(to: source, replyTo: requestId, type: "project.listChanges.response", projectId: projectId, payload: payload)
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "project.listChanges.response", projectId: projectId, error: error.localizedDescription, errorCode: gitErrorCode(error))
+            }
+        } else if type == "project.readDiff" {
+            guard let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any],
+                  let requestData = try? JSONSerialization.data(withJSONObject: payload),
+                  let request = try? JSONDecoder().decode(ProjectDiffRequest.self, from: requestData) else {
+                sendResponse(to: source, replyTo: requestId, type: "project.readDiff.response", error: "Invalid project.readDiff request")
+                return
+            }
+            do {
+                let diff: ProjectDiffResponse = try await hostRequest("/projects/\(projectId)/diff", method: "POST", body: request)
+                let value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(diff))
+                guard let responsePayload = value as? [String: Any] else { throw NSError(domain: "AgentIDE", code: 500, userInfo: [NSLocalizedDescriptionKey: "Invalid diff response"]) }
+                sendResponse(to: source, replyTo: requestId, type: "project.readDiff.response", projectId: projectId, payload: responsePayload)
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "project.readDiff.response", projectId: projectId, error: error.localizedDescription, errorCode: gitErrorCode(error))
+            }
         } else if type == "session.list" {
             guard let projectId = message["projectId"] as? String else {
                 sendResponse(to: source, replyTo: requestId, type: "session.list.response", error: "Invalid session.list request", errorCode: "session_request_failed")
@@ -503,9 +533,13 @@ final class MacConnection: ObservableObject {
 
     private func perform<Response: Decodable>(_ request: URLRequest) async throws -> Response {
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-            let message = (try? JSONDecoder().decode(ErrorResponse.self, from: data).error) ?? "Request failed"
-            throw NSError(domain: "AgentIDE", code: (response as? HTTPURLResponse)?.statusCode ?? -1, userInfo: [NSLocalizedDescriptionKey: message])
+        let httpResponse = response as? HTTPURLResponse
+        guard let httpResponse, 200..<300 ~= httpResponse.statusCode else {
+            let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+            let message = errorResponse?.error ?? "Request failed"
+            var userInfo: [String: Any] = [NSLocalizedDescriptionKey: message]
+            if let code = errorResponse?.code { userInfo["AgentIDEErrorCode"] = code }
+            throw NSError(domain: "AgentIDE", code: httpResponse?.statusCode ?? -1, userInfo: userInfo)
         }
         if Response.self == EmptyResponse.self { return EmptyResponse() as! Response }
         return try JSONDecoder().decode(Response.self, from: data)
@@ -520,7 +554,14 @@ private struct InteractionResponseRequest: Encodable {
     var optionIds: [String]?
     var freeText: String?
 }
-private struct ErrorResponse: Decodable { let error: String }
+private struct ErrorResponse: Decodable { let error: String; let code: String? }
+private func gitErrorCode(_ error: Error) -> String {
+    let code = (error as NSError).userInfo["AgentIDEErrorCode"] as? String
+    switch code {
+    case let .some(value) where ["git_timeout", "git_output_too_large", "git_busy", "git_invalid_path", "git_query_failed"].contains(value): return value
+    default: return "project_request_failed"
+    }
+}
 private func isSecure(_ url: URL) -> Bool { url.scheme == "https" || (url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost")) }
 
 private func isValidSnapshot(_ snapshot: SessionSnapshot, sessionId: String, projectId: String) -> Bool {

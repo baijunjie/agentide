@@ -1,15 +1,18 @@
+import AgentIDEProtocol
 import SwiftUI
 
 enum WorkspaceLevel: Codable, Equatable {
     case session
     case browser
     case file(TextFileSelection)
+    case changes
+    case diff(GitChange)
 
     var depth: Int {
         switch self {
         case .session: 0
-        case .browser: 1
-        case .file: 2
+        case .browser, .changes: 1
+        case .file, .diff: 2
         }
     }
 }
@@ -18,9 +21,19 @@ struct WorkspaceNavigationState: Codable, Equatable {
     var level: WorkspaceLevel = .session
     var fullScreenImage: ImageFileSelection?
     private(set) var presentedFile: TextFileSelection?
+    private(set) var presentedChange: GitChange?
 
     mutating func showBrowser() {
         level = .browser
+    }
+
+    mutating func showChanges() { level = .changes }
+
+    mutating func prepareDiff(_ change: GitChange) { presentedChange = change }
+
+    mutating func activatePreparedDiff() {
+        guard level == .changes, let presentedChange else { return }
+        level = .diff(presentedChange)
     }
 
     mutating func prepareFile(_ selection: TextFileSelection) {
@@ -40,10 +53,12 @@ struct WorkspaceNavigationState: Codable, Equatable {
         switch level {
         case .session:
             break
-        case .browser:
+        case .browser, .changes:
             level = .session
         case .file:
             level = .browser
+        case .diff:
+            level = .changes
         }
     }
 
@@ -51,20 +66,25 @@ struct WorkspaceNavigationState: Codable, Equatable {
         level = .session
         fullScreenImage = nil
         presentedFile = nil
+        presentedChange = nil
     }
 
     mutating func finishFileDismissal() {
         if case .file = level { return }
         presentedFile = nil
+        if case .diff = level { return }
+        presentedChange = nil
     }
 
 }
 
-struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, FileContent: View>: View {
+struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, FileContent: View, ChangesContent: View, DiffContent: View>: View {
     @Binding var navigation: WorkspaceNavigationState
     @ViewBuilder let sessionContent: () -> SessionContent
     @ViewBuilder let browserContent: () -> BrowserContent
     @ViewBuilder let fileContent: (TextFileSelection) -> FileContent
+    @ViewBuilder let changesContent: () -> ChangesContent
+    @ViewBuilder let diffContent: (GitChange) -> DiffContent
     @State private var dragTranslation: CGFloat = 0
 
     var body: some View {
@@ -85,12 +105,25 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
                     .allowsHitTesting(navigation.level == .browser)
                     .accessibilityHidden(navigation.level != .browser)
 
+                changesContent()
+                    .frame(width: width - inactiveInset)
+                    .workspaceLayer(browserStyle(depth: depth, width: width, inactiveInset: inactiveInset))
+                    .allowsHitTesting(navigation.level == .changes)
+                    .accessibilityHidden(navigation.level != .changes)
+
                 if let selection = navigation.presentedFile {
                     fileContent(selection)
                         .frame(width: width - inactiveInset)
                         .workspaceLayer(fileStyle(depth: depth, width: width, inactiveInset: inactiveInset))
                         .allowsHitTesting(navigation.level == .file(selection))
                         .accessibilityHidden(navigation.level != .file(selection))
+                }
+                if let change = navigation.presentedChange {
+                    diffContent(change)
+                        .frame(width: width - inactiveInset)
+                        .workspaceLayer(fileStyle(depth: depth, width: width, inactiveInset: inactiveInset))
+                        .allowsHitTesting(navigation.level == .diff(change))
+                        .accessibilityHidden(navigation.level != .diff(change))
                 }
 
                 retiredLayerReturnArea(width: inactiveInset)
@@ -151,9 +184,9 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
         switch navigation.level {
         case .session:
             return horizontal && beginsAwayFromSystemBackEdge && value.translation.width > 0
-        case .browser:
+        case .browser, .changes:
             return horizontal && beginsAwayFromSystemBackEdge && value.translation.width < 0
-        case .file:
+        case .file, .diff:
             return false
         }
     }

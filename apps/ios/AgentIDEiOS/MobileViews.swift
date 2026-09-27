@@ -63,6 +63,11 @@ struct FileBrowserView: View {
             openImage: { selectedImage = $0 }
         )
         .navigationTitle(project.name)
+        .toolbar {
+            NavigationLink { ChangesView(project: project) } label: { Image(systemName: "arrow.triangle.branch") }
+                .accessibilityLabel("Changes")
+                .accessibilityIdentifier("file-browser-changes")
+        }
         .navigationDestination(isPresented: Binding(
             get: { selectedText != nil },
             set: { if !$0 { selectedText = nil } }

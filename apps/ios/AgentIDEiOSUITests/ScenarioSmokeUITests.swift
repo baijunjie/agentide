@@ -21,10 +21,9 @@ final class ScenarioSmokeUITests: XCTestCase {
         approve.tap()
         XCTAssertTrue(app.staticTexts["Responded"].waitForExistence(timeout: 5))
 
-        let answer = app.textFields["Your answer"]
-        XCTAssertTrue(answer.waitForExistence(timeout: 5))
-        answer.tap()
-        answer.typeText("Review changes")
+        let option = app.buttons["question-option-tests"]
+        XCTAssertTrue(option.waitForExistence(timeout: 5))
+        option.tap()
         let submit = app.buttons["question-submit-question-demo"]
         let submitEnabled = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "enabled == true"),
@@ -87,5 +86,50 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(scenarioText.waitForExistence(timeout: 5))
         app.buttons["file-actions"].tap()
         XCTAssertFalse(app.buttons["Send to Agent"].exists)
+    }
+
+    func testComprehensiveScenarioOpensChangesDiffAndReturnsToSession() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+
+        let project = app.staticTexts["Scenario Workspace"]
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        let session = app.staticTexts["Scenario approval"]
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
+        session.tap()
+
+        let changes = app.buttons["session-changes"]
+        XCTAssertTrue(changes.waitForExistence(timeout: 5))
+        changes.tap()
+        let file = app.buttons["change-unstaged-Sources/App.swift"]
+        XCTAssertTrue(file.waitForExistence(timeout: 5))
+        file.tap()
+        XCTAssertTrue(app.staticTexts["diff-hunk"].waitForExistence(timeout: 5))
+        let back = app.buttons["Return to previous workspace level"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        XCTAssertTrue(app.staticTexts["Run tests"].waitForExistence(timeout: 5))
+    }
+
+    func testComprehensiveScenarioFileChangedOpensMatchingDiff() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+
+        let project = app.staticTexts["Scenario Workspace"]
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        let session = app.staticTexts["Scenario approval"]
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
+        session.tap()
+
+        let fileChanged = app.buttons["file-changed-Sources/App.swift"]
+        XCTAssertTrue(fileChanged.waitForExistence(timeout: 5))
+        fileChanged.tap()
+        XCTAssertTrue(app.staticTexts["diff-hunk"].waitForExistence(timeout: 5))
     }
 }

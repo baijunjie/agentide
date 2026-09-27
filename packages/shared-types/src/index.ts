@@ -37,3 +37,56 @@ export interface FileEntry {
   isText?: boolean;
   isImage?: boolean;
 }
+
+export type GitChangeKind = "added" | "modified" | "deleted" | "renamed" | "untracked";
+
+export type GitChangeArea = "staged" | "unstaged";
+
+interface GitChangeBase {
+  relativePath: string;
+  area: GitChangeArea;
+  isBinary: boolean;
+  oldSize?: number;
+  newSize?: number;
+}
+
+export interface RenamedGitChange extends GitChangeBase {
+  previousRelativePath: string;
+  kind: "renamed";
+}
+
+export interface NonRenamedGitChange extends GitChangeBase {
+  previousRelativePath?: never;
+  kind: Exclude<GitChangeKind, "renamed">;
+}
+
+export type GitChange = RenamedGitChange | NonRenamedGitChange;
+
+export interface GitRepositoryChangesResponse {
+  isGitRepository: true;
+  changes: GitChange[];
+}
+
+export interface NonGitRepositoryChangesResponse {
+  isGitRepository: false;
+  changes: [];
+}
+
+export type ProjectChangesResponse = GitRepositoryChangesResponse | NonGitRepositoryChangesResponse;
+
+export interface ProjectDiffRequest {
+  relativePath: string;
+  area: GitChangeArea;
+}
+
+export interface TextProjectDiffResponse {
+  change: GitChange & { isBinary: false };
+  diff?: string;
+}
+
+export interface BinaryProjectDiffResponse {
+  change: GitChange & { isBinary: true };
+  diff?: never;
+}
+
+export type ProjectDiffResponse = TextProjectDiffResponse | BinaryProjectDiffResponse;

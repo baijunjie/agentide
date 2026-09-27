@@ -79,6 +79,101 @@ public struct FileEntry: Codable, Equatable, Sendable {
     public let isImage: Bool?
 }
 
+public enum GitChangeKind: String, Codable, Sendable {
+    case added
+    case modified
+    case deleted
+    case renamed
+    case untracked
+}
+
+public enum GitChangeArea: String, Codable, Sendable {
+    case staged
+    case unstaged
+}
+
+public struct GitChange: Codable, Equatable, Sendable {
+    public let relativePath: String
+    public let previousRelativePath: String?
+    public let kind: GitChangeKind
+    public let area: GitChangeArea
+    public let isBinary: Bool
+    public let oldSize: Int?
+    public let newSize: Int?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case relativePath, previousRelativePath, kind, area, isBinary, oldSize, newSize
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        relativePath = try container.decode(String.self, forKey: .relativePath)
+        previousRelativePath = try decodeOptionalString(container, forKey: .previousRelativePath)
+        kind = try container.decode(GitChangeKind.self, forKey: .kind)
+        area = try container.decode(GitChangeArea.self, forKey: .area)
+        isBinary = try container.decode(Bool.self, forKey: .isBinary)
+        oldSize = try decodeOptionalNonNegativeInt(container, forKey: .oldSize)
+        newSize = try decodeOptionalNonNegativeInt(container, forKey: .newSize)
+
+        if kind == .renamed {
+            guard previousRelativePath != nil else {
+                throw ProtocolDecodingError.missingRenamedPath
+            }
+        } else if previousRelativePath != nil {
+            throw ProtocolDecodingError.unexpectedPreviousPath
+        }
+    }
+}
+
+public struct ProjectChangesResponse: Codable, Equatable, Sendable {
+    public let isGitRepository: Bool
+    public let changes: [GitChange]
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case isGitRepository, changes }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isGitRepository = try container.decode(Bool.self, forKey: .isGitRepository)
+        changes = try container.decode([GitChange].self, forKey: .changes)
+        if !isGitRepository && !changes.isEmpty {
+            throw ProtocolDecodingError.nonGitRepositoryChanges
+        }
+    }
+}
+
+public struct ProjectDiffRequest: Codable, Equatable, Sendable {
+    public let relativePath: String
+    public let area: GitChangeArea
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case relativePath, area }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        relativePath = try container.decode(String.self, forKey: .relativePath)
+        area = try container.decode(GitChangeArea.self, forKey: .area)
+    }
+}
+
+public struct ProjectDiffResponse: Codable, Equatable, Sendable {
+    public let change: GitChange
+    public let diff: String?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case change, diff }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        change = try container.decode(GitChange.self, forKey: .change)
+        diff = try decodeOptionalString(container, forKey: .diff)
+        if change.isBinary && diff != nil {
+            throw ProtocolDecodingError.binaryDiff
+        }
+    }
+}
+
 public struct EncryptedPayload: Codable, Equatable, Sendable {
     public enum Version: Int, Codable, Sendable { case v1 = 1 }
 
@@ -622,13 +717,18 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
 }
 
 private enum ProtocolDecodingError: Error {
+    case binaryDiff
     case emptyActions
     case emptyString(String)
     case explicitNull(String)
     case invalidMessageType(String)
+    case negativeSize(Int)
     case invalidSequence(Int)
     case invalidTimestamp(String)
+    case missingRenamedPath
+    case nonGitRepositoryChanges
     case unknownFields([String])
+    case unexpectedPreviousPath
 }
 
 private func requireNonEmpty(_ value: String, field: String) throws {
@@ -668,6 +768,19 @@ private func decodeOptionalString<Key: CodingKey>(
         throw ProtocolDecodingError.explicitNull(key.stringValue)
     }
     return try container.decode(String.self, forKey: key)
+}
+
+private func decodeOptionalNonNegativeInt<Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) throws -> Int? {
+    guard container.contains(key) else { return nil }
+    guard try !container.decodeNil(forKey: key) else {
+        throw ProtocolDecodingError.explicitNull(key.stringValue)
+    }
+    let value = try container.decode(Int.self, forKey: key)
+    guard value >= 0 else { throw ProtocolDecodingError.negativeSize(value) }
+    return value
 }
 
 private func decodeOptionalJSONValue<Key: CodingKey>(

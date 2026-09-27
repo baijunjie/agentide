@@ -1,0 +1,28 @@
+{
+  "projectChangesRequest": {},
+  "projectChangesResponse": {
+    "isGitRepository": true,
+    "changes": [
+      { "relativePath": "src/new.ts", "kind": "added", "area": "staged", "isBinary": false, "newSize": 42 },
+      { "relativePath": "src/changed.ts", "kind": "modified", "area": "unstaged", "isBinary": false, "oldSize": 16, "newSize": 24 },
+      { "relativePath": "src/removed.ts", "kind": "deleted", "area": "staged", "isBinary": false, "oldSize": 12 },
+      { "relativePath": "src/new-name.ts", "previousRelativePath": "src/old-name.ts", "kind": "renamed", "area": "unstaged", "isBinary": false, "oldSize": 32, "newSize": 32 },
+      { "relativePath": "assets/image.png", "kind": "untracked", "area": "unstaged", "isBinary": true, "newSize": 1024 }
+    ]
+  },
+  "nonGitProjectChangesResponse": {
+    "isGitRepository": false,
+    "changes": []
+  },
+  "projectDiffRequest": {
+    "relativePath": "src/changed.ts",
+    "area": "unstaged"
+  },
+  "projectDiffResponse": {
+    "change": { "relativePath": "src/changed.ts", "kind": "modified", "area": "unstaged", "isBinary": false, "oldSize": 16, "newSize": 24 },
+    "diff": "diff --git a/src/changed.ts b/src/changed.ts\n"
+  },
+  "binaryProjectDiffResponse": {
+    "change": { "relativePath": "assets/image.png", "kind": "untracked", "area": "unstaged", "isBinary": true, "newSize": 1024 }
+  }
+}

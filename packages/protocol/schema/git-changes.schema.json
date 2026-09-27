@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentide.local/schema/git-changes.schema.json",
+  "$defs": {
+    "gitChange": {
+      "type": "object",
+      "required": ["relativePath", "kind", "area", "isBinary"],
+      "properties": {
+        "relativePath": { "type": "string" },
+        "previousRelativePath": { "type": "string" },
+        "kind": { "enum": ["added", "modified", "deleted", "renamed", "untracked"] },
+        "area": { "enum": ["staged", "unstaged"] },
+        "isBinary": { "type": "boolean" },
+        "oldSize": { "type": "integer", "minimum": 0 },
+        "newSize": { "type": "integer", "minimum": 0 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "renamed" } }, "required": ["kind"] },
+          "then": {
+            "properties": { "previousRelativePath": {} },
+            "required": ["previousRelativePath"]
+          },
+          "else": {
+            "not": {
+              "properties": { "previousRelativePath": {} },
+              "required": ["previousRelativePath"]
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "projectChangesRequest": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "projectChangesResponse": {
+      "type": "object",
+      "required": ["isGitRepository", "changes"],
+      "properties": {
+        "isGitRepository": { "type": "boolean" },
+        "changes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/gitChange" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "isGitRepository": { "const": false } }, "required": ["isGitRepository"] },
+          "then": { "properties": { "changes": { "type": "array", "maxItems": 0 } } }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "projectDiffRequest": {
+      "type": "object",
+      "required": ["relativePath", "area"],
+      "properties": {
+        "relativePath": { "type": "string" },
+        "area": { "enum": ["staged", "unstaged"] }
+      },
+      "additionalProperties": false
+    },
+    "projectDiffResponse": {
+      "type": "object",
+      "required": ["change"],
+      "properties": {
+        "change": { "$ref": "#/$defs/gitChange" },
+        "diff": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "change": {
+                "type": "object",
+                "properties": { "isBinary": { "const": true } },
+                "required": ["isBinary"]
+              }
+            },
+            "required": ["change"]
+          },
+          "then": {
+            "not": {
+              "properties": { "diff": {} },
+              "required": ["diff"]
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

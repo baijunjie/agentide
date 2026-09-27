@@ -2,6 +2,44 @@ import AgentIDEProtocol
 import SwiftUI
 import UIKit
 
+enum AgentFileReference {
+    static func format(relativePath: String) -> String? {
+        guard !relativePath.isEmpty,
+              !relativePath.hasPrefix("/"),
+              !relativePath.hasPrefix("\\"),
+              !relativePath.contains("\\") else { return nil }
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return nil }
+        return "@\(relativePath)"
+    }
+}
+
+private struct FileActionsMenu<Label: View>: View {
+    let name: String
+    let relativePath: String
+    let sendToAgent: ((String) -> Void)?
+    @ViewBuilder let label: () -> Label
+
+    var body: some View {
+        Menu {
+            Button("Copy File Name") { UIPasteboard.general.string = name }
+            Button("Copy Relative Path") { UIPasteboard.general.string = relativePath }
+            if let reference = AgentFileReference.format(relativePath: relativePath) {
+                Button("Copy Agent Reference") { UIPasteboard.general.string = reference }
+                    .accessibilityIdentifier("copy-agent-reference")
+                if let sendToAgent {
+                    Button("Send to Agent") { sendToAgent(reference) }
+                        .accessibilityIdentifier("send-reference-to-agent")
+                }
+            }
+        } label: {
+            label()
+        }
+        .accessibilityLabel("File actions")
+        .accessibilityIdentifier("file-actions")
+    }
+}
+
 struct TextFileSelection: Codable, Hashable {
     let projectId: String
     let name: String
@@ -32,6 +70,12 @@ struct ImageFileSelection: Codable, Identifiable, Equatable {
 struct TextFileViewer: View {
     @EnvironmentObject private var connection: MobileConnection
     let selection: TextFileSelection
+    let sendToAgent: ((String) -> Void)?
+
+    init(selection: TextFileSelection, sendToAgent: ((String) -> Void)? = nil) {
+        self.selection = selection
+        self.sendToAgent = sendToAgent
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,10 +91,13 @@ struct TextFileViewer: View {
         .navigationTitle(selection.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            Menu {
-                Button("Copy File Name") { UIPasteboard.general.string = selection.name }
-                Button("Copy Relative Path") { UIPasteboard.general.string = selection.relativePath }
-            } label: { Image(systemName: "ellipsis.circle") }
+            FileActionsMenu(
+                name: selection.name,
+                relativePath: selection.relativePath,
+                sendToAgent: sendToAgent
+            ) {
+                Image(systemName: "ellipsis.circle")
+            }
         }
         .task {
             connection.requestFile(projectId: selection.projectId, relativePath: selection.relativePath, binary: false)
@@ -121,11 +168,13 @@ struct ImageViewer: View {
     @EnvironmentObject private var connection: MobileConnection
     @Environment(\.dismiss) private var dismiss
     let selection: ImageFileSelection
+    let sendToAgent: ((String) -> Void)?
     @State private var selectedPath: String
     @State private var imageIsZoomed = false
 
-    init(selection: ImageFileSelection) {
+    init(selection: ImageFileSelection, sendToAgent: ((String) -> Void)? = nil) {
         self.selection = selection
+        self.sendToAgent = sendToAgent
         _selectedPath = State(initialValue: selection.relativePath)
     }
 
@@ -161,10 +210,11 @@ struct ImageViewer: View {
                         Text(selectedPath).font(.caption).lineLimit(1)
                     }
                     Spacer()
-                    Menu {
-                        Button("Copy File Name") { UIPasteboard.general.string = selectedName }
-                        Button("Copy Relative Path") { UIPasteboard.general.string = selectedPath }
-                    } label: { Image(systemName: "ellipsis").frame(width: 36, height: 36).background(.ultraThinMaterial, in: Circle()) }
+                    FileActionsMenu(name: selectedName, relativePath: selectedPath, sendToAgent: sendToAgent) {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 36, height: 36)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
                 }
                 .foregroundStyle(.white)
                 .padding()

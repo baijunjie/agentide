@@ -149,7 +149,6 @@ private struct AgentSessionView: View {
     @EnvironmentObject private var connection: MobileConnection
     let project: RemoteProject
     let session: Session
-    @State private var input = ""
     @State private var workspace = WorkspaceNavigationState()
 
     init(project: RemoteProject, session: Session) {
@@ -180,7 +179,7 @@ private struct AgentSessionView: View {
                 openImage: { workspace.showImage($0) }
             )
         } fileContent: { selection in
-            TextFileViewer(selection: selection)
+            TextFileViewer(selection: selection, sendToAgent: addReferenceToDraft)
         }
         .navigationTitle(workspaceTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -191,22 +190,22 @@ private struct AgentSessionView: View {
                         workspace.showBrowser()
                     }
                 } label: { Image(systemName: "folder") }
+                .accessibilityLabel("Browse files")
+                .accessibilityIdentifier("session-browse-files")
                 .disabled(workspace.level != .session)
             }
             if workspace.level == .session {
                 ToolbarItem(placement: .principal) { StatusBadge(status: status) }
             }
         }
-        .fullScreenCover(item: $workspace.fullScreenImage) { ImageViewer(selection: $0) }
+        .fullScreenCover(item: $workspace.fullScreenImage) {
+            ImageViewer(selection: $0, sendToAgent: addReferenceToDraft)
+        }
         .task {
             workspace = connection.workspaceNavigation(for: session.id)
             connection.openSession(session)
         }
         .onChange(of: workspace) { connection.persistWorkspaceNavigation(workspace, for: session.id) }
-        .onChange(of: connection.acceptedMessage?.id) {
-            guard let accepted = connection.acceptedMessage, accepted.sessionId == session.id else { return }
-            if input.trimmingCharacters(in: .whitespacesAndNewlines) == accepted.content { input = "" }
-        }
     }
 
     private var workspaceTitle: String {
@@ -249,9 +248,10 @@ private struct AgentSessionView: View {
             }
             Divider()
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("Message the agent", text: $input, axis: .vertical)
+                TextField("Message the agent", text: draftBinding, axis: .vertical)
                     .lineLimit(1...5)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("session-composer")
                     .disabled(!canSend(status) || isSending)
                 if status == .running {
                     Button { connection.cancel(session: session) } label: { Image(systemName: "stop.fill") }
@@ -259,14 +259,28 @@ private struct AgentSessionView: View {
                         .accessibilityLabel("Cancel current turn")
                 } else {
                     Button {
-                        connection.sendMessage(session: session, content: input)
+                        connection.sendDraft(session: session)
                     } label: { Image(systemName: "arrow.up") }
                     .buttonStyle(.borderedProminent)
-                    .disabled(input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canSend(status) || !connection.online || isSending)
+                    .disabled(connection.draft(for: session.id).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canSend(status) || !connection.online || isSending)
                     .accessibilityLabel("Send message")
                 }
             }
             .padding()
+        }
+    }
+
+    private var draftBinding: Binding<String> {
+        Binding(
+            get: { connection.draft(for: session.id) },
+            set: { connection.updateDraft($0, for: session.id) }
+        )
+    }
+
+    private func addReferenceToDraft(_ reference: String) {
+        connection.appendToDraft(reference, for: session.id)
+        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
+            workspace.returnToSession()
         }
     }
 }

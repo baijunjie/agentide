@@ -52,10 +52,24 @@ final class ScenarioSmokeUITests: XCTestCase {
         app.buttons["Create"].tap()
         XCTAssertTrue(app.staticTexts["Scenario task"].waitForExistence(timeout: 5))
 
-        let message = app.textFields["Message the agent"]
+        let browseFiles = app.buttons["session-browse-files"]
+        XCTAssertTrue(browseFiles.waitForExistence(timeout: 5))
+        browseFiles.tap()
+        let sessionReadme = app.staticTexts.matching(identifier: "README.md").firstMatch
+        XCTAssertTrue(sessionReadme.waitForExistence(timeout: 5))
+        sessionReadme.tap()
+        let fileActions = app.buttons["file-actions"]
+        XCTAssertTrue(fileActions.waitForExistence(timeout: 5))
+        fileActions.tap()
+        let sendReference = app.buttons["Send to Agent"]
+        XCTAssertTrue(sendReference.waitForExistence(timeout: 5))
+        sendReference.tap()
+
+        let message = app.textFields["session-composer"]
         XCTAssertTrue(message.waitForExistence(timeout: 5))
+        XCTAssertEqual(message.value as? String, "@README.md")
         message.tap()
-        message.typeText("Cancel this simulated turn")
+        message.typeText(" Summarize this file")
         app.buttons["Send message"].tap()
         let cancelTurn = app.buttons["Cancel current turn"]
         XCTAssertTrue(cancelTurn.waitForExistence(timeout: 5))
@@ -71,5 +85,7 @@ final class ScenarioSmokeUITests: XCTestCase {
             NSPredicate(format: "label CONTAINS[c] %@", "Scenario workspace")
         ).firstMatch
         XCTAssertTrue(scenarioText.waitForExistence(timeout: 5))
+        app.buttons["file-actions"].tap()
+        XCTAssertFalse(app.buttons["Send to Agent"].exists)
     }
 }

@@ -3,6 +3,20 @@ import AgentIDEProtocol
 @testable import AgentIDEiOS
 
 final class FileBrowserRecoveryStateTests: XCTestCase {
+    func testReturningToSessionClearsPresentedFile() {
+        let selection = try! JSONDecoder().decode(TextFileSelection.self, from: Data("""
+        {"projectId":"project-one","name":"README.md","relativePath":"README.md","isMarkdown":true}
+        """.utf8))
+        var navigation = WorkspaceNavigationState(level: .browser)
+        navigation.prepareFile(selection)
+        navigation.activatePreparedFile()
+
+        navigation.returnToSession()
+
+        XCTAssertEqual(navigation.level, .session)
+        XCTAssertNil(navigation.presentedFile)
+    }
+
     func testCollapseRemovesDescendantExpansionAndColdRestoreCanFinish() {
         let restored = FileBrowserRecoveryState(
             expandedPaths: ["src", "src/foo"],
@@ -265,6 +279,65 @@ final class FileBrowserRecoveryStateTests: XCTestCase {
         cache.removeSession("session-pending")
         XCTAssertNil(cache.pendingInteractions?["session-pending"])
         XCTAssertNil(cache.sessionProjects["session-pending"])
+    }
+
+    func testDraftsParticipateInRecoveryRetentionAndSessionCleanup() throws {
+        let activeSessionId = "session-active"
+        let evictedSessionId = "session-evicted"
+        var cache = MobileRecoveryCache(
+            projects: [RemoteProject(id: "project-one", name: "One", createdAt: "2026-09-27T00:00:00Z", enabledAgents: [.codex], online: true)],
+            sessions: ["project-one": [session(id: activeSessionId, projectId: "project-one")]],
+            sessionEvents: [:],
+            sessionProjects: [activeSessionId: "project-one", evictedSessionId: "project-one"],
+            workspaceNavigations: nil,
+            fileBrowserNavigations: nil,
+            sessionDrafts: [activeSessionId: "active draft", evictedSessionId: String(repeating: "x", count: 600_000)],
+            submittedInteractions: [],
+            resolvedInteractions: []
+        ).trimmedForPersistence(activeSessionId: activeSessionId)
+
+        XCTAssertEqual(cache.sessionDrafts?[activeSessionId], "active draft")
+        XCTAssertNil(cache.sessionDrafts?[evictedSessionId])
+        XCTAssertLessThanOrEqual(try JSONEncoder().encode(cache).count, MobileRecoveryLimits.persistenceByteBudget)
+
+        cache.removeSession(activeSessionId)
+        XCTAssertNil(cache.sessionDrafts?[activeSessionId])
+    }
+
+    @MainActor
+    func testDraftsRoundTripAndFollowPerProjectSessionCountEviction() throws {
+        let projectId = "project-many"
+        let values = (1...21).map { session(id: "session-\($0)", projectId: projectId) }
+        let sessionProjects = Dictionary(uniqueKeysWithValues: values.map { ($0.id, projectId) })
+        let drafts = Dictionary(uniqueKeysWithValues: values.map { ($0.id, "draft \($0.id)") })
+        let cache = MobileRecoveryCache(
+            projects: [RemoteProject(id: projectId, name: "Many", createdAt: "2026-09-27T00:00:00Z", enabledAgents: [.codex], online: true)],
+            sessions: [projectId: values],
+            sessionEvents: [:],
+            sessionProjects: sessionProjects,
+            workspaceNavigations: nil,
+            fileBrowserNavigations: nil,
+            sessionDrafts: drafts,
+            submittedInteractions: [],
+            resolvedInteractions: []
+        )
+
+        let restored = try JSONDecoder().decode(MobileRecoveryCache.self, from: JSONEncoder().encode(cache))
+        XCTAssertEqual(restored.sessionDrafts, drafts)
+
+        let trimmed = restored.trimmedForPersistence(activeSessionId: nil)
+        let retainedIds = Set(trimmed.sessions[projectId]?.map(\.id) ?? [])
+        XCTAssertEqual(retainedIds.count, MobileRecoveryLimits.sessionsPerProject)
+        XCTAssertEqual(Set(trimmed.sessionDrafts?.keys.map { $0 } ?? []), retainedIds)
+        XCTAssertEqual(Set(trimmed.sessionProjects.keys), retainedIds)
+
+        let connection = MobileConnection(
+            scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive),
+            recoveryCacheOverride: restored
+        )
+        let runtimeRetainedIds = Set(connection.sessions[projectId]?.map(\.id) ?? [])
+        XCTAssertEqual(runtimeRetainedIds.count, MobileRecoveryLimits.sessionsPerProject)
+        XCTAssertEqual(Set(connection.sessionDrafts.keys), runtimeRetainedIds)
     }
 
     func testOversizedProtectedPendingRequiresDiscardAndIdentifiesAffectedSessions() {

@@ -4,6 +4,63 @@ import AgentIDEProtocol
 
 @MainActor
 final class MobileConnectionScenarioTests: XCTestCase {
+    func testAgentReferenceFormatsRelativePathsAsLiteralText() {
+        XCTAssertEqual(AgentFileReference.format(relativePath: "Sources/Context Guide [draft] 说明.md"), "@Sources/Context Guide [draft] 说明.md")
+        XCTAssertNil(AgentFileReference.format(relativePath: ""))
+        XCTAssertNil(AgentFileReference.format(relativePath: "/tmp/file.swift"))
+        XCTAssertNil(AgentFileReference.format(relativePath: "../file.swift"))
+        XCTAssertNil(AgentFileReference.format(relativePath: "Sources\\file.swift"))
+    }
+
+    func testDraftsAreSessionScopedAndReferencesAppendWithoutDeduplication() {
+        let connection = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
+
+        connection.updateDraft("Inspect this", for: "session-one")
+        connection.appendToDraft("@Sources/App.swift", for: "session-one")
+        connection.appendToDraft("@Sources/App.swift", for: "session-one")
+        connection.updateDraft("Other session", for: "session-two")
+
+        XCTAssertEqual(connection.draft(for: "session-one"), "Inspect this\n@Sources/App.swift\n@Sources/App.swift")
+        XCTAssertEqual(connection.draft(for: "session-two"), "Other session")
+    }
+
+    func testSuccessfulResponseClearsOnlyTheSubmittedDraftVersion() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        connection.requestSessions(projectId: "project-demo")
+        await connection.waitForScenarioIdle()
+        let session = try XCTUnwrap(connection.sessions["project-demo"]?.first)
+
+        connection.updateDraft("@README.md\nExplain this", for: session.id)
+        XCTAssertTrue(connection.sendDraft(session: session))
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.draft(for: session.id), "")
+        XCTAssertEqual(runtime.sentMessages.last, .init(sessionId: session.id, content: "@README.md\nExplain this"))
+
+        connection.updateDraft("First version", for: session.id)
+        XCTAssertTrue(connection.sendDraft(session: session))
+        connection.updateDraft("Edited while sending", for: session.id)
+        connection.updateDraft("First version", for: session.id)
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.draft(for: session.id), "First version")
+    }
+
+    func testFailedSendKeepsDraft() async throws {
+        let connection = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .requestFailure))
+        await connection.waitForScenarioIdle()
+        let session = try JSONDecoder().decode(Session.self, from: Data("""
+        {"id":"session-failure","projectId":"project-demo","agentType":"codex","title":"Failure","status":"idle","createdAt":"2026-09-27T00:00:00Z","updatedAt":"2026-09-27T00:00:00Z"}
+        """.utf8))
+
+        connection.updateDraft("Keep this draft", for: session.id)
+        XCTAssertTrue(connection.sendDraft(session: session))
+        await connection.waitForScenarioIdle()
+
+        XCTAssertEqual(connection.draft(for: session.id), "Keep this draft")
+        XCTAssertEqual(connection.sessionError(for: session.id), "Scenario request failure")
+    }
+
     func testComprehensiveScenarioExercisesConnectionStateWithoutNetwork() async throws {
         let connection = MobileConnection(
             scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive)
@@ -77,8 +134,8 @@ final class MobileConnectionScenarioTests: XCTestCase {
 
         XCTAssertTrue(connection.sendMessage(session: created, content: "Continue in simulation"))
         await connection.waitForScenarioIdle()
-        XCTAssertEqual(connection.acceptedMessage?.content, "Continue in simulation")
         XCTAssertEqual(connection.status(for: created), .running)
+        XCTAssertEqual(connection.draft(for: created.id), "")
         XCTAssertTrue(connection.sessionEvents[created.id]?.contains { event in
             if case let .message(message) = event { return message.role == .user && message.content == "Continue in simulation" }
             return false
@@ -126,6 +183,27 @@ final class MobileConnectionScenarioTests: XCTestCase {
         XCTAssertEqual(invalid.error, "Invalid response")
     }
 
+    func testTimeoutAndOfflineSendKeepDraft() async throws {
+        let session = try testSession(id: "session-draft-errors")
+        let timedOut = MobileConnection(
+            scenarioRuntime: MobileScenarioRuntime(scenario: .timeout),
+            requestTimeout: .milliseconds(1)
+        )
+        await timedOut.waitForScenarioIdle()
+        timedOut.updateDraft("Keep after timeout", for: session.id)
+        XCTAssertTrue(timedOut.sendDraft(session: session))
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(timedOut.draft(for: session.id), "Keep after timeout")
+        XCTAssertEqual(timedOut.sessionError(for: session.id), "Request timed out")
+
+        let offline = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .offline))
+        await offline.waitForScenarioIdle()
+        offline.updateDraft("Keep while offline", for: session.id)
+        XCTAssertFalse(offline.sendDraft(session: session))
+        XCTAssertEqual(offline.draft(for: session.id), "Keep while offline")
+        XCTAssertEqual(offline.sessionError(for: session.id), "Mac is offline")
+    }
+
     func testUnknownReplyDoesNotMutateProjects() async throws {
         let connection = MobileConnection(
             scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive)
@@ -148,5 +226,11 @@ final class MobileConnectionScenarioTests: XCTestCase {
         await connection.waitForScenarioIdle()
 
         XCTAssertEqual(connection.projects.map(\.id), ["project-demo"])
+    }
+
+    private func testSession(id: String, projectId: String = "project-demo") throws -> Session {
+        try JSONDecoder().decode(Session.self, from: Data("""
+        {"id":"\(id)","projectId":"\(projectId)","agentType":"codex","title":"Draft","status":"idle","createdAt":"2026-09-27T00:00:00Z","updatedAt":"2026-09-27T00:00:00Z"}
+        """.utf8))
     }
 }

@@ -47,6 +47,12 @@ struct WorkspaceNavigationState: Codable, Equatable {
         }
     }
 
+    mutating func returnToSession() {
+        level = .session
+        fullScreenImage = nil
+        presentedFile = nil
+    }
+
     mutating func finishFileDismissal() {
         if case .file = level { return }
         presentedFile = nil

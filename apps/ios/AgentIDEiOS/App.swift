@@ -41,12 +41,6 @@ private struct DecodedImage: @unchecked Sendable {
     let image: UIImage
     let cost: Int
 }
-struct AcceptedMessage: Equatable {
-    let id = UUID()
-    let sessionId: String
-    let content: String
-}
-
 struct MobileRecoveryCache: Codable {
     var projects: [RemoteProject]
     var sessions: [String: [Session]]
@@ -55,6 +49,7 @@ struct MobileRecoveryCache: Codable {
     var sessionProjects: [String: String]
     var workspaceNavigations: [String: WorkspaceNavigationState]?
     var fileBrowserNavigations: [String: FileBrowserRecoveryState]?
+    var sessionDrafts: [String: String]? = nil
     var submittedInteractions: [String]?
     var resolvedInteractions: [String]?
 
@@ -79,6 +74,7 @@ struct MobileRecoveryCache: Codable {
         let pendingSessionIds = Set((cache.pendingInteractions ?? [:]).compactMap { $0.value.isEmpty ? nil : $0.key })
         retainedProjectIds.formUnion(pendingSessionIds.compactMap { cache.sessionProjects[$0] ?? sessionsById[$0]?.projectId })
         cache.projects = cache.projects.filter { retainedProjectIds.contains($0.id) }
+        let listedSessionIdsBeforeTrim = Set(cache.sessions.values.flatMap { $0.map(\.id) })
         cache.sessions = cache.sessions.reduce(into: [:]) { result, item in
             guard retainedProjectIds.contains(item.key) else { return }
             let ordered = item.value.sorted { $0.updatedAt > $1.updatedAt }
@@ -90,8 +86,11 @@ struct MobileRecoveryCache: Codable {
             retainedIds.formUnion(ordered.compactMap { pendingSessionIds.contains($0.id) ? $0.id : nil })
             result[item.key] = ordered.filter { retainedIds.contains($0.id) }
         }
-        let sessionIdsInRetainedProjects = Set(cache.sessions.values.flatMap { $0.map(\.id) })
+        let listedSessionIdsAfterTrim = Set(cache.sessions.values.flatMap { $0.map(\.id) })
+        let evictedListedSessionIds = listedSessionIdsBeforeTrim.subtracting(listedSessionIdsAfterTrim)
+        let sessionIdsInRetainedProjects = listedSessionIdsAfterTrim
             .union(cache.sessionProjects.compactMap { retainedProjectIds.contains($0.value) ? $0.key : nil })
+            .subtracting(evictedListedSessionIds)
         var retainedSessionIds = cache.retainedSessionIds(activeSessionId: activeSessionId)
             .intersection(sessionIdsInRetainedProjects)
         retainedSessionIds.formUnion(pendingSessionIds)
@@ -104,6 +103,7 @@ struct MobileRecoveryCache: Codable {
         }
         cache.pendingInteractions = cache.pendingInteractions?.filter { retainedSessionIds.contains($0.key) }
         cache.workspaceNavigations = cache.workspaceNavigations?.filter { retainedSessionIds.contains($0.key) }
+        cache.sessionDrafts = cache.sessionDrafts?.filter { retainedSessionIds.contains($0.key) && !$0.value.isEmpty }
         cache.fileBrowserNavigations = cache.fileBrowserNavigations?.reduce(into: [:]) { result, item in
             guard retainedProjectIds.contains(item.key) else { return }
             result[item.key] = item.value.trimmed()
@@ -136,6 +136,14 @@ struct MobileRecoveryCache: Codable {
                 cache.fileBrowserNavigations?.removeValue(forKey: projectId)
                 continue
             }
+            if let sessionId = cache.sessionDrafts?.keys.sorted().reversed().first(where: { $0 != activeSessionId }) {
+                cache.sessionDrafts?.removeValue(forKey: sessionId)
+                continue
+            }
+            if let sessionId = cache.sessionDrafts?.keys.sorted().last {
+                cache.sessionDrafts?.removeValue(forKey: sessionId)
+                continue
+            }
             if let key = cache.submittedInteractions?.sorted().last {
                 cache.submittedInteractions?.removeAll { $0 == key }
                 continue
@@ -163,6 +171,7 @@ struct MobileRecoveryCache: Codable {
             result[session.id] = session
         }
         let ids = Set(sessionsById.keys).union(sessionProjects.keys).union(sessionEvents.keys)
+            .union(sessionDrafts?.keys.map { $0 } ?? [])
         let ordered = ids.sorted { lhs, rhs in
             let lhsUpdatedAt = sessionsById[lhs]?.updatedAt ?? ""
             let rhsUpdatedAt = sessionsById[rhs]?.updatedAt ?? ""
@@ -178,6 +187,7 @@ struct MobileRecoveryCache: Codable {
         sessionEvents.removeValue(forKey: sessionId)
         pendingInteractions?.removeValue(forKey: sessionId)
         workspaceNavigations?.removeValue(forKey: sessionId)
+        sessionDrafts?.removeValue(forKey: sessionId)
         for projectId in Array(sessions.keys) {
             sessions[projectId]?.removeAll { $0.id == sessionId }
             if sessions[projectId]?.isEmpty == true { sessions.removeValue(forKey: projectId) }
@@ -318,6 +328,9 @@ private extension PendingInteraction {
 @MainActor
 final class MobileConnection: ObservableObject {
     struct Claim: Decodable { let token: String }
+    private struct SubmittedDraft {
+        let revision: Int
+    }
     private enum PendingRequest {
         case projectList
         case directory(String)
@@ -326,7 +339,7 @@ final class MobileConnection: ObservableObject {
         case imageList(String)
         case sessionList(String)
         case sessionCreate(String)
-        case sessionSend(String, String, String)
+        case sessionSend(String, String)
         case sessionCancel(String, String)
         case sessionSnapshot(String, String)
         case sessionSubscribe(String, String)
@@ -377,9 +390,9 @@ final class MobileConnection: ObservableObject {
     @Published var submittedInteractions: Set<String>
     @Published var resolvedInteractions: Set<String> = []
     @Published var sessionErrors: [String: String] = [:]
+    @Published private(set) var sessionDrafts: [String: String]
     @Published private(set) var recoveryErrors: [String: String] = [:]
     @Published var createdSession: Session?
-    @Published var acceptedMessage: AcceptedMessage?
     @Published private var imageRevision = 0
     @Published var error: String?
     private let deviceId: String
@@ -405,6 +418,8 @@ final class MobileConnection: ObservableObject {
     private var pendingInteractionEvents: [String: [AgentEvent]]
     private var workspaceNavigations: [String: WorkspaceNavigationState]
     private var fileBrowserNavigations: [String: FileBrowserRecoveryState]
+    private var draftRevisions: [String: Int]
+    private var submittedDrafts: [String: SubmittedDraft] = [:]
     private var activeSessionId: String?
     private var pendingEventInteractions: [String: Set<String>] = [:]
     private var snapshottingSessions: Set<String> = []
@@ -418,14 +433,15 @@ final class MobileConnection: ObservableObject {
 
     init(
         scenarioRuntime: MobileScenarioRuntime? = MobileScenarioRuntime.fromLaunchArguments(),
-        requestTimeout: Duration = .seconds(15)
+        requestTimeout: Duration = .seconds(15),
+        recoveryCacheOverride: MobileRecoveryCache? = nil
     ) {
         self.scenarioRuntime = scenarioRuntime
         self.requestTimeout = requestTimeout
-        let recoveryCache = scenarioRuntime == nil
+        let recoveryCache = recoveryCacheOverride ?? (scenarioRuntime == nil
             ? UserDefaults.standard.data(forKey: "mobileRecoveryCache")
                 .flatMap { try? JSONDecoder().decode(MobileRecoveryCache.self, from: $0) }
-            : nil
+            : nil)
         let restoredSessionProjects = recoveryCache?.sessionProjects
                 ?? (scenarioRuntime == nil
                     ? UserDefaults.standard.dictionary(forKey: "sessionProjects") as? [String: String]
@@ -442,6 +458,9 @@ final class MobileConnection: ObservableObject {
         pendingInteractionEvents = recoveryCache?.pendingInteractions ?? [:]
         workspaceNavigations = recoveryCache?.workspaceNavigations ?? [:]
         fileBrowserNavigations = recoveryCache?.fileBrowserNavigations ?? [:]
+        let restoredDrafts = recoveryCache?.sessionDrafts ?? [:]
+        sessionDrafts = restoredDrafts
+        draftRevisions = Dictionary(uniqueKeysWithValues: restoredDrafts.keys.map { ($0, 0) })
         submittedInteractions = Set(recoveryCache?.submittedInteractions
             ?? (scenarioRuntime == nil ? UserDefaults.standard.stringArray(forKey: "submittedInteractions") : nil) ?? [])
         resolvedInteractions = Set(recoveryCache?.resolvedInteractions
@@ -542,6 +561,22 @@ final class MobileConnection: ObservableObject {
         scheduleRecoveryPersistence()
     }
 
+    func draft(for sessionId: String) -> String {
+        sessionDrafts[sessionId] ?? ""
+    }
+
+    func updateDraft(_ draft: String, for sessionId: String) {
+        draftRevisions[sessionId, default: 0] += 1
+        if draft.isEmpty { sessionDrafts.removeValue(forKey: sessionId) }
+        else { sessionDrafts[sessionId] = draft }
+        scheduleRecoveryPersistence()
+    }
+
+    func appendToDraft(_ text: String, for sessionId: String) {
+        let current = draft(for: sessionId)
+        updateDraft(current.isEmpty ? text : "\(current)\n\(text)", for: sessionId)
+    }
+
     func fileBrowserNavigation(for projectId: String) -> FileBrowserRecoveryState {
         fileBrowserNavigations[projectId] ?? FileBrowserRecoveryState(expandedPaths: [], scrollPosition: nil)
     }
@@ -584,7 +619,15 @@ final class MobileConnection: ObservableObject {
         sessionErrors.removeValue(forKey: session.id)
         activeSessionOperations.insert(operation)
         send(type: "session.sendMessage", target: macDeviceId, projectId: session.projectId, sessionId: session.id,
-             payload: ["content": message, "afterSequence": sessionEventSequences[session.id] ?? -1], pending: .sessionSend(session.projectId, session.id, message))
+             payload: ["content": message, "afterSequence": sessionEventSequences[session.id] ?? -1], pending: .sessionSend(session.projectId, session.id))
+        return true
+    }
+
+    @discardableResult
+    func sendDraft(session: Session) -> Bool {
+        let draft = draft(for: session.id)
+        guard sendMessage(session: session, content: draft) else { return false }
+        submittedDrafts[session.id] = SubmittedDraft(revision: draftRevisions[session.id, default: 0])
         return true
     }
 
@@ -716,7 +759,8 @@ final class MobileConnection: ObservableObject {
                     self.sessionFeedItems = [:]; self.eventSessionStatuses = [:]; self.historicallyResolvedInteractions = []
                     self.pendingEventInteractions = [:]; self.pendingInteractionEvents = [:]
                     self.sessionProjects = [:]; self.subscribedSessionProjects = [:]; self.sessionEventSequences = [:]
-                    self.workspaceNavigations = [:]; self.fileBrowserNavigations = [:]
+                    self.workspaceNavigations = [:]; self.fileBrowserNavigations = [:]; self.sessionDrafts = [:]
+                    self.draftRevisions = [:]; self.submittedDrafts = [:]
                     self.submittedInteractions = []; self.resolvedInteractions = []
                     self.persistRecoveryState()
                     self.imageCache.removeAllObjects(); self.socket = nil; return
@@ -930,13 +974,18 @@ final class MobileConnection: ObservableObject {
         case let .sessionCreate(projectId):
             activeSessionOperations.remove("create:\(projectId)")
             if let message { sessionErrors[projectId] = message }
-        case let .sessionSend(_, sessionId, content):
+        case let .sessionSend(_, sessionId):
             activeSessionOperations.remove("send:\(sessionId)")
             if let message { sessionErrors[sessionId] = message }
             else {
                 eventSessionStatuses[sessionId] = .running
-                acceptedMessage = AcceptedMessage(sessionId: sessionId, content: content)
+                if let submittedDraft = submittedDrafts[sessionId],
+                   draftRevisions[sessionId, default: 0] == submittedDraft.revision {
+                    sessionDrafts.removeValue(forKey: sessionId)
+                    scheduleRecoveryPersistence()
+                }
             }
+            submittedDrafts.removeValue(forKey: sessionId)
         case let .sessionCancel(_, sessionId):
             activeSessionOperations.remove("cancel:\(sessionId)")
             if let message { sessionErrors[sessionId] = message }
@@ -1119,6 +1168,7 @@ final class MobileConnection: ObservableObject {
             removeRecoveryProject(projectId)
         }
         projects = projects.filter { retainedProjectIds.contains($0.id) }
+        let listedSessionIdsBeforeTrim = Set(sessions.values.flatMap { $0.map(\.id) })
         sessions = sessions.reduce(into: [:]) { result, item in
             guard retainedProjectIds.contains(item.key) else { return }
             let ordered = item.value.sorted { $0.updatedAt > $1.updatedAt }
@@ -1131,8 +1181,11 @@ final class MobileConnection: ObservableObject {
             result[item.key] = ordered.filter { retainedIds.contains($0.id) }
         }
 
-        let sessionIdsInRetainedProjects = Set(sessions.values.flatMap { $0.map(\.id) })
+        let listedSessionIdsAfterTrim = Set(sessions.values.flatMap { $0.map(\.id) })
+        let evictedListedSessionIds = listedSessionIdsBeforeTrim.subtracting(listedSessionIdsAfterTrim)
+        let sessionIdsInRetainedProjects = listedSessionIdsAfterTrim
             .union(sessionProjects.compactMap { retainedProjectIds.contains($0.value) ? $0.key : nil })
+            .subtracting(evictedListedSessionIds)
         var retainedSessionIds = MobileRecoveryRetention.retaining(
             orderedSessionIds().filter { sessionIdsInRetainedProjects.contains($0) },
             limit: MobileRecoveryLimits.sessionCount,
@@ -1157,6 +1210,7 @@ final class MobileConnection: ObservableObject {
         snapshottingSessions.formIntersection(retainedSessionIds)
         subscribingSessions.formIntersection(retainedSessionIds)
         workspaceNavigations = workspaceNavigations.filter { retainedSessionIds.contains($0.key) }
+        sessionDrafts = sessionDrafts.filter { retainedSessionIds.contains($0.key) && !$0.value.isEmpty }
         fileBrowserNavigations = fileBrowserNavigations.reduce(into: [:]) { result, item in
             guard retainedProjectIds.contains(item.key) else { return }
             result[item.key] = item.value.trimmed()
@@ -1179,6 +1233,7 @@ final class MobileConnection: ObservableObject {
             result[session.id] = session
         }
         let ids = Set(sessionProjects.keys).union(Set(sessionEvents.keys)).union(Set(sessionsById.keys))
+            .union(sessionDrafts.keys)
         let ordered = ids.sorted { lhs, rhs in
             let lhsSession = sessionsById[lhs]
             let rhsSession = sessionsById[rhs]
@@ -1223,6 +1278,7 @@ final class MobileConnection: ObservableObject {
             sessionProjects: sessionProjects,
             workspaceNavigations: workspaceNavigations,
             fileBrowserNavigations: fileBrowserNavigations,
+            sessionDrafts: sessionDrafts,
             submittedInteractions: submittedInteractions.sorted(),
             resolvedInteractions: resolvedInteractions.sorted()
         )
@@ -1256,6 +1312,14 @@ final class MobileConnection: ObservableObject {
                 fileBrowserNavigations.removeValue(forKey: projectId)
                 continue
             }
+            if let sessionId = sessionDrafts.keys.sorted().reversed().first(where: { $0 != activeSessionId }) {
+                sessionDrafts.removeValue(forKey: sessionId)
+                continue
+            }
+            if let sessionId = sessionDrafts.keys.sorted().last {
+                sessionDrafts.removeValue(forKey: sessionId)
+                continue
+            }
             if let key = submittedInteractions.sorted().last {
                 submittedInteractions.remove(key)
                 continue
@@ -1286,6 +1350,9 @@ final class MobileConnection: ObservableObject {
         eventSessionStatuses.removeValue(forKey: sessionId)
         pendingEventInteractions.removeValue(forKey: sessionId)
         workspaceNavigations.removeValue(forKey: sessionId)
+        sessionDrafts.removeValue(forKey: sessionId)
+        draftRevisions.removeValue(forKey: sessionId)
+        submittedDrafts.removeValue(forKey: sessionId)
         snapshottingSessions.remove(sessionId)
         subscribingSessions.remove(sessionId)
         for projectId in Array(sessions.keys) {
@@ -1370,7 +1437,7 @@ final class MobileConnection: ObservableObject {
             return projectId != nil
         case let .sessionList(expectedProjectId), let .sessionCreate(expectedProjectId):
             return projectId == expectedProjectId
-        case let .sessionSend(expectedProjectId, expectedSessionId, _), let .sessionCancel(expectedProjectId, expectedSessionId):
+        case let .sessionSend(expectedProjectId, expectedSessionId), let .sessionCancel(expectedProjectId, expectedSessionId):
             return projectId == expectedProjectId && sessionId == expectedSessionId
         case let .sessionSnapshot(expectedProjectId, expectedSessionId), let .sessionSubscribe(expectedProjectId, expectedSessionId):
             return projectId == expectedProjectId && sessionId == expectedSessionId

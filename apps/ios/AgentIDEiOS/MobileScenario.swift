@@ -29,6 +29,11 @@ struct MobileScenarioPresence: Equatable {
     let macDeviceId: String?
 }
 
+struct ScenarioSentMessage: Equatable {
+    let sessionId: String
+    let content: String
+}
+
 /// A deterministic in-process stand-in for the Mac endpoint. It exchanges the same envelope JSON
 /// as the relay connection so simulator tests cover decoding and request correlation as well as UI state.
 final class MobileScenarioRuntime {
@@ -41,6 +46,7 @@ final class MobileScenarioRuntime {
     private var events: [String: [[String: Any]]]
     private var pendingInteractions: [String: [[String: Any]]]
     private var deferredInbound: [Data] = []
+    private(set) var sentMessages: [ScenarioSentMessage] = []
 
     let presence: MobileScenarioPresence
 
@@ -125,7 +131,9 @@ final class MobileScenarioRuntime {
             return [success(for: request, type: "session.subscribe.response", replyTo: requestId, payload: [:])]
         case "session.sendMessage":
             guard let sessionId = request["sessionId"] as? String else { return [] }
-            enqueue(event(sessionId: sessionId, type: "message", extra: ["role": "user", "content": (request["payload"] as? [String: Any])?["content"] as? String ?? "", "format": "plain"]))
+            let content = (request["payload"] as? [String: Any])?["content"] as? String ?? ""
+            sentMessages.append(.init(sessionId: sessionId, content: content))
+            enqueue(event(sessionId: sessionId, type: "message", extra: ["role": "user", "content": content, "format": "plain"]))
             enqueue(event(sessionId: sessionId, type: "status", extra: ["status": "running", "message": "Scenario response started"]))
             enqueue(event(sessionId: sessionId, type: "text.delta", extra: ["content": "Working offline…"]))
             updateSessionStatus(sessionId, status: "running")
@@ -233,7 +241,11 @@ final class MobileScenarioRuntime {
     private func entries(at path: String) -> [[String: Any]] {
         switch path {
         case "": return [file(name: "README.md", path: "README.md"), directory(name: "Sources", path: "Sources"), directory(name: "assets", path: "assets")]
-        case "Sources": return [file(name: "App.swift", path: "Sources/App.swift")]
+        case "Sources": return [
+            file(name: "App.swift", path: "Sources/App.swift"),
+            file(name: "Context Guide.md", path: "Sources/Context Guide.md"),
+            file(name: "说明.md", path: "Sources/说明.md"),
+        ]
         case "assets": return [file(name: "logo.png", path: "assets/logo.png", image: true)]
         default: return []
         }

@@ -54,17 +54,22 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   const validateAgentEvent = ajv.compile(await readJson(schemaUrl("agent-event")));
   const sharedSchema = await readJson(schemaUrl("shared-types"));
   const gitChangesSchema = await readJson(schemaUrl("git-changes"));
+  const projectSearchSchema = await readJson(schemaUrl("project-search"));
   ajv.addSchema(sharedSchema);
   const validateSessionSnapshot = ajv.compile(await readJson(schemaUrl("session-snapshot")));
   const validateProject = ajv.getSchema(`${sharedSchema.$id}#/$defs/project`);
   const validateSession = ajv.getSchema(`${sharedSchema.$id}#/$defs/session`);
   const validateFileEntry = ajv.getSchema(`${sharedSchema.$id}#/$defs/fileEntry`);
   ajv.addSchema(gitChangesSchema);
+  ajv.addSchema(projectSearchSchema);
   const validateGitChange = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/gitChange` });
   const validateProjectChangesRequest = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectChangesRequest` });
   const validateProjectChangesResponse = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectChangesResponse` });
   const validateProjectDiffRequest = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectDiffRequest` });
   const validateProjectDiffResponse = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectDiffResponse` });
+  const validateProjectSearchRequest = ajv.compile({ $ref: `${projectSearchSchema.$id}#/$defs/projectSearchFilesRequest` });
+  const validateProjectCancelSearchRequest = ajv.compile({ $ref: `${projectSearchSchema.$id}#/$defs/projectCancelSearchRequest` });
+  const validateProjectSearchResponse = ajv.compile({ $ref: `${projectSearchSchema.$id}#/$defs/projectSearchFilesResponse` });
   const validRequest = await readJson(fixtureUrl("valid-request"));
   const validResponse = await readJson(fixtureUrl("valid-response-no-payload"));
   const validNullResponse = await readJson(fixtureUrl("valid-response-null-payload"));
@@ -145,6 +150,24 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   assert.equal(validateGitChange(await readJson(fixtureUrl("git-changes-invalid-previous-path-on-modified"))), false);
   assert.equal(validateGitChange(await readJson(fixtureUrl("git-changes-invalid-extra-field"))), false);
   assert.equal(validateProjectDiffResponse(await readJson(fixtureUrl("git-changes-invalid-binary-diff"))), false);
+
+  const projectSearch = await readJson(fixtureUrl("project-search"));
+  assert.equal(validateProjectSearchRequest(projectSearch.projectSearchFilesRequest), true);
+  assert.equal(validateProjectCancelSearchRequest(projectSearch.projectCancelSearchRequest), true);
+  assert.equal(validateProjectSearchResponse(projectSearch.projectSearchFilesResponse), true);
+  assert.equal(validateProjectSearchRequest(await readJson(fixtureUrl("project-search-invalid-limit"))), false);
+  assert.equal(validateProjectSearchRequest(await readJson(fixtureUrl("project-search-invalid-query"))), false);
+  assert.equal(validateProjectSearchRequest(await readJson(fixtureUrl("project-search-invalid-unicode-whitespace"))), false);
+  assert.equal(validateProjectSearchRequest(await readJson(fixtureUrl("project-search-valid-feff"))), true);
+  assert.equal(validateProjectSearchRequest(await readJson(fixtureUrl("project-search-valid-zero-width-space"))), true);
+  assert.equal(validateProjectSearchRequest(await readJson(fixtureUrl("project-search-invalid-extra-field"))), false);
+  assert.equal(validateProjectSearchResponse(await readJson(fixtureUrl("project-search-invalid-result-extra-field"))), false);
+  assert.equal(validateProjectSearchResponse(await readJson(fixtureUrl("project-search-invalid-result-size"))), false);
+  assert.equal(validateProjectSearchResponse(await readJson(fixtureUrl("project-search-invalid-result-null"))), false);
+  assert.equal(validateProjectSearchResponse({
+    ...projectSearch.projectSearchFilesResponse,
+    results: Array.from({ length: 101 }, () => projectSearch.projectSearchFilesResponse.results[0]),
+  }), false);
 
   assert.equal(
     validateSessionSnapshot(await readJson(fixtureUrl("session-snapshot"))),

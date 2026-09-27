@@ -228,6 +228,131 @@ final class MobileConnectionScenarioTests: XCTestCase {
         XCTAssertEqual(connection.projects.map(\.id), ["project-demo"])
     }
 
+    func testFileSearchCoversResultsEmptyLimitFailureAndOffline() async throws {
+        let comprehensive = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
+        await comprehensive.waitForScenarioIdle()
+        XCTAssertNotNil(comprehensive.searchFiles(projectId: "project-demo", query: "context"))
+        await comprehensive.waitForScenarioIdle()
+        XCTAssertEqual(comprehensive.fileSearch(projectId: "project-demo")?.results.map(\.relativePath), ["Sources/Context Guide.md"])
+        XCTAssertFalse(try XCTUnwrap(comprehensive.fileSearch(projectId: "project-demo")).hasMore)
+
+        let empty = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .searchEmpty))
+        await empty.waitForScenarioIdle()
+        empty.searchFiles(projectId: "project-demo", query: "missing")
+        await empty.waitForScenarioIdle()
+        XCTAssertTrue(try XCTUnwrap(empty.fileSearch(projectId: "project-demo")).results.isEmpty)
+
+        let limited = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .searchLimited))
+        await limited.waitForScenarioIdle()
+        limited.searchFiles(projectId: "project-demo", query: "source", limit: 2)
+        await limited.waitForScenarioIdle()
+        XCTAssertTrue(try XCTUnwrap(limited.fileSearch(projectId: "project-demo")).hasMore)
+
+        let failed = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .requestFailure))
+        await failed.waitForScenarioIdle()
+        failed.searchFiles(projectId: "project-demo", query: "readme")
+        await failed.waitForScenarioIdle()
+        XCTAssertEqual(failed.fileSearchError(projectId: "project-demo")?.code, "SCENARIO_FAILURE")
+
+        let offline = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .offline))
+        await offline.waitForScenarioIdle()
+        XCTAssertNil(offline.searchFiles(projectId: "project-demo", query: "readme"))
+        XCTAssertEqual(offline.fileSearchError(projectId: "project-demo")?.code, "MAC_OFFLINE")
+    }
+
+    func testFileSearchValidatesUnicodeScalarQueryBounds() async {
+        let connection = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
+        await connection.waitForScenarioIdle()
+        XCTAssertNotNil(connection.searchFiles(projectId: "project-demo", query: "e\u{301}"))
+        await connection.waitForScenarioIdle()
+        connection.recordFileSearch(projectId: "project-demo", query: "e\u{301}")
+        XCTAssertEqual(connection.fileSearchHistory(projectId: "project-demo").first, "e\u{301}")
+        XCTAssertNil(connection.searchFiles(projectId: "project-demo", query: String(repeating: "😀", count: 257)))
+        XCTAssertEqual(projectFileSearchQueryTrimmingWhiteSpace("\u{85}ab\u{3000}"), "ab")
+        XCTAssertEqual(projectFileSearchQueryTrimmingWhiteSpace("\u{FEFF}ab\u{200B}"), "\u{FEFF}ab\u{200B}")
+    }
+
+    func testReplacingLeavingAndTimingOutSearchCancelAndIgnoreStaleResponses() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        runtime.holdsSearchResponses = true
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+
+        let oldSearchId = try XCTUnwrap(connection.searchFiles(projectId: "project-demo", query: "old"))
+        let oldRequestId = try XCTUnwrap(runtime.requestIdsByType["project.searchFiles"]?.last)
+        let newSearchId = try XCTUnwrap(connection.searchFiles(projectId: "project-demo", query: "new"))
+        let newRequestId = try XCTUnwrap(runtime.requestIdsByType["project.searchFiles"]?.last)
+        XCTAssertNotEqual(oldRequestId, newRequestId)
+        XCTAssertTrue(runtime.cancelledSearchIds.contains(oldSearchId))
+
+        let newResponse = try XCTUnwrap(runtime.respondToHeldSearch(
+            newRequestId,
+            results: [runtime.searchEntry(name: "new.swift", path: "Sources/new.swift")]
+        ))
+        connection.injectScenarioInbound([newResponse])
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.fileSearch(projectId: "project-demo")?.searchId, newSearchId)
+
+        let oldResponse = try XCTUnwrap(runtime.failHeldSearch(oldRequestId))
+        connection.injectScenarioInbound([oldResponse])
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.fileSearch(projectId: "project-demo")?.results.first?.relativePath, "Sources/new.swift")
+        XCTAssertNil(connection.fileSearchError(projectId: "project-demo"))
+        XCTAssertNil(connection.error)
+
+        let leavingSearchId = try XCTUnwrap(connection.searchFiles(projectId: "project-demo", query: "leave"))
+        connection.cancelFileSearch(projectId: "project-demo")
+        await connection.waitForScenarioIdle()
+        XCTAssertTrue(runtime.cancelledSearchIds.contains(leavingSearchId))
+        let cancelRequestId = try XCTUnwrap(runtime.requestIdsByType["project.cancelSearch"]?.last)
+        let cancelFailure = try XCTUnwrap(runtime.failureResponse(
+            for: cancelRequestId,
+            type: "project.cancelSearch.response",
+            code: "PROJECT_SEARCH_FAILED",
+            message: "Late cancel failure"
+        ))
+        connection.injectScenarioInbound([cancelFailure])
+        await connection.waitForScenarioIdle()
+        XCTAssertNil(connection.error)
+
+        let timeoutRuntime = MobileScenarioRuntime(scenario: .timeout)
+        let timedOut = MobileConnection(scenarioRuntime: timeoutRuntime, requestTimeout: .milliseconds(1))
+        await timedOut.waitForScenarioIdle()
+        let timedOutSearchId = try XCTUnwrap(timedOut.searchFiles(projectId: "project-demo", query: "timeout"))
+        try await Task.sleep(for: .milliseconds(20))
+        await timedOut.waitForScenarioIdle()
+        XCTAssertEqual(timedOut.fileSearchError(projectId: "project-demo")?.code, "TIMEOUT")
+        XCTAssertTrue(timeoutRuntime.cancelledSearchIds.contains(timedOutSearchId))
+    }
+
+    func testFileSearchHistoryIsBoundedAndClearableWithoutScenarioPersistence() async {
+        let connection = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
+        await connection.waitForScenarioIdle()
+        for index in 0..<12 {
+            connection.recordFileSearch(projectId: "project-demo", query: "query-\(index)")
+        }
+        XCTAssertEqual(connection.fileSearchHistory(projectId: "project-demo").count, 10)
+        connection.removeFileSearchHistory(projectId: "project-demo", query: "query-11")
+        XCTAssertFalse(connection.fileSearchHistory(projectId: "project-demo").contains("query-11"))
+        connection.clearFileSearchHistory(projectId: "project-demo")
+        XCTAssertTrue(connection.fileSearchHistory(projectId: "project-demo").isEmpty)
+    }
+
+    func testFileSearchHistoryStorePersistsBoundsAndProjectIsolation() throws {
+        let suiteName = "MobileConnectionScenarioTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = FileSearchHistoryStore(defaults: defaults)
+        store.save((0..<12).map { "query-\($0)" }, projectId: "project-one")
+        store.save(["other"], projectId: "project-two")
+
+        let restored = FileSearchHistoryStore(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
+        XCTAssertEqual(restored.load(projectId: "project-one")?.count, 10)
+        XCTAssertEqual(restored.load(projectId: "project-two"), ["other"])
+        restored.save([], projectId: "project-one")
+        XCTAssertEqual(store.load(projectId: "project-one"), [])
+    }
+
     func testChangesStatesCoverSuccessCleanNonGitAndBinary() async throws {
         let comprehensive = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
         await comprehensive.waitForScenarioIdle()

@@ -1,14 +1,14 @@
 import type { AgentAdapter } from "@agentide/agent-core";
 import type { Envelope } from "@agentide/protocol";
-import type { FileEntry } from "@agentide/shared-types";
+import type { FileEntry, ProjectSearchFilesResponse } from "@agentide/shared-types";
 
 export {
   ReconnectingRelayClient,
   type RelayClientOptions,
 } from "./relay-client.js";
-export { LocalFileService } from "./file-service.js";
+export { FileSearchError, LocalFileService, type FileSearchLimits } from "./file-service.js";
 export { LocalGitService, GitServiceError, type GitArea } from "./git-service.js";
-export { createAgentHostServer } from "./ipc-server.js";
+export { createAgentHostServer, FileSearchTasks } from "./ipc-server.js";
 export { ProjectStore } from "./project-store.js";
 export { SessionManager, type CreateManagedSession } from "./session-manager.js";
 export { SessionStore } from "./session-store.js";
@@ -18,6 +18,7 @@ export interface FileService {
   readText(projectId: string, relativePath: string): Promise<string>;
   readBinary(projectId: string, relativePath: string): Promise<Uint8Array>;
   listSiblingImages(projectId: string, relativePath: string): Promise<FileEntry[]>;
+  search(projectId: string, searchId: string, query: string, limit: number, signal: AbortSignal): Promise<ProjectSearchFilesResponse>;
 }
 
 export interface RelayClient {

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createAgentHostServer, LocalFileService, LocalGitService, ProjectStore } from "../dist/index.js";
+import { createAgentHostServer, FileSearchTasks, LocalFileService, LocalGitService, ProjectStore } from "../dist/index.js";
 
 test("project registration persists metadata and detects available agents", async (context) => {
   const fixture = await createFixture(context);
@@ -128,6 +128,141 @@ test("ignored paths are rejected when requested directly or below a nested direc
   await assert.rejects(service.readText(project.id, "Sources/node_modules/nested.txt"), /ignored/);
 });
 
+test("file search matches Unicode names and paths with stable bounded ordering", async (context) => {
+  const fixture = await createFixture(context);
+  await mkdir(join(fixture.root, "Sources", "Nested"), { recursive: true });
+  await mkdir(join(fixture.root, "docs"));
+  await mkdir(join(fixture.root, "node_modules"));
+  await writeFile(join(fixture.root, "README.md"), "root");
+  await writeFile(join(fixture.root, "docs", "readme-notes.txt"), "notes");
+  await writeFile(join(fixture.root, "Sources", "Nested", "Other-README.swift"), "swift");
+  await writeFile(join(fixture.root, "Sources", "Café.swift"), "swift");
+  await writeFile(join(fixture.root, "node_modules", "README-hidden.md"), "hidden");
+  await symlink(join(fixture.base, "outside"), join(fixture.root, "linked"));
+  const store = new ProjectStore(fixture.storePath, "");
+  const project = await store.add(fixture.root);
+  const service = new LocalFileService(store);
+
+  const readmes = await service.search(project.id, "search-readme", "ReAdMe", 2, new AbortController().signal);
+  assert.deepEqual(readmes.results.map((entry) => entry.relativePath), ["docs/readme-notes.txt", "README.md"]);
+  assert.equal(readmes.hasMore, true);
+  const unicode = await service.search(project.id, "search-unicode", "CAFÉ", 10, new AbortController().signal);
+  assert.deepEqual(unicode.results.map((entry) => entry.relativePath), ["Sources/Café.swift"]);
+  await writeFile(join(fixture.root, "Straße.md"), "text");
+  await writeFile(join(fixture.root, "ς.md"), "text");
+  const folded = await service.search(project.id, "search-folded", "STRASSE", 10, new AbortController().signal);
+  assert.deepEqual(folded.results.map((entry) => entry.relativePath), ["Straße.md"]);
+  const sigma = await service.search(project.id, "search-sigma", "Σ.", 10, new AbortController().signal);
+  assert.deepEqual(sigma.results.map((entry) => entry.relativePath), ["ς.md"]);
+  await writeFile(join(fixture.root, "i.md"), "text");
+  const dotlessI = await service.search(project.id, "search-dotless-i", "ı.", 10, new AbortController().signal);
+  assert.deepEqual(dotlessI.results.map((entry) => entry.relativePath), []);
+  await assert.rejects(
+    service.search(project.id, "search-whitespace", "\u0085ab", 10, new AbortController().signal),
+    (error) => error.code === "search_invalid_request",
+  );
+  await service.search(project.id, "search-feff", "\uFEFFab", 10, new AbortController().signal);
+  await service.search(project.id, "search-zero-width-space", "\u200Bab", 10, new AbortController().signal);
+});
+
+test("file search reports traversal limits and cooperatively cancels", async (context) => {
+  const fixture = await createFixture(context);
+  for (let index = 0; index < 80; index += 1) {
+    const directory = join(fixture.root, `folder-${String(index).padStart(3, "0")}`);
+    await mkdir(directory);
+    await writeFile(join(directory, `needle-${index}.txt`), "match");
+  }
+  const store = new ProjectStore(fixture.storePath, "");
+  const project = await store.add(fixture.root);
+  const limited = new LocalFileService(store, { traversedEntries: 10, timeoutMs: 5_000, responseBytes: 700 * 1024 });
+  const partial = await limited.search(project.id, "search-limited", "needle", 100, new AbortController().signal);
+  assert.equal(partial.hasMore, true);
+
+  const timed = new LocalFileService(store, { traversedEntries: 50_000, timeoutMs: 0, responseBytes: 700 * 1024 });
+  const timedPartial = await timed.search(project.id, "search-timed", "needle", 100, new AbortController().signal);
+  assert.equal(timedPartial.hasMore, true);
+  const byteLimited = new LocalFileService(store, { traversedEntries: 50_000, timeoutMs: 5_000, responseBytes: 180 });
+  const bytePartial = await byteLimited.search(project.id, "search-bytes", "needle", 100, new AbortController().signal);
+  assert.equal(Buffer.byteLength(JSON.stringify(bytePartial), "utf8") <= 180, true);
+  assert.equal(bytePartial.hasMore, true);
+  await assert.rejects(
+    limited.search(project.id, "x".repeat(129), "needle", 10, new AbortController().signal),
+    (error) => error.code === "search_invalid_request",
+  );
+  const scalarBounded = await limited.search(
+    project.id, "😀".repeat(128), "needle", 10, new AbortController().signal,
+  );
+  assert.equal(scalarBounded.searchId, "😀".repeat(128));
+  await assert.rejects(
+    limited.search(project.id, "😀".repeat(129), "needle", 10, new AbortController().signal),
+    (error) => error.code === "search_invalid_request",
+  );
+
+  const controller = new AbortController();
+  const search = new LocalFileService(store).search(project.id, "search-cancel", "needle", 100, controller.signal);
+  setImmediate(() => controller.abort());
+  await assert.rejects(search, (error) => error.code === "search_cancelled");
+});
+
+test("file search tasks retain early cancellation and bound distinct concurrent searches", async () => {
+  const tasks = new FileSearchTasks();
+  tasks.cancel("cancel-before-start");
+  await assert.rejects(
+    tasks.run("cancel-before-start", async () => "unexpected"),
+    (error) => error.code === "search_cancelled",
+  );
+
+  let releaseDuplicate;
+  const duplicate = tasks.run("duplicate", () => new Promise((resolve) => { releaseDuplicate = resolve; }));
+  await assert.rejects(
+    tasks.run("duplicate", async () => "unexpected"),
+    (error) => error.code === "search_invalid_request",
+  );
+  releaseDuplicate("done");
+  await duplicate;
+
+  const releases = new Map();
+  const operations = Array.from({ length: 4 }, (_, index) => {
+    const searchId = `active-${index}`;
+    return tasks.run(searchId, (signal) => new Promise((resolve) => {
+      releases.set(searchId, { resolve, signal });
+    }));
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    tasks.run("overflow", async () => "unexpected"),
+    (error) => error.code === "search_busy",
+  );
+  tasks.cancel("active-0");
+  assert.equal(releases.get("active-0").signal.aborted, true);
+  for (const value of releases.values()) value.resolve("done");
+  await Promise.all(operations);
+});
+
+test("file search keeps partial results when a queued directory becomes a file", async (context) => {
+  const fixture = await createFixture(context);
+  const changing = join(fixture.root, "z-changing");
+  await mkdir(changing);
+  await writeFile(join(fixture.root, "needle-before.txt"), "match");
+  await writeFile(join(changing, "needle-after.txt"), "match");
+  const store = new ProjectStore(fixture.storePath, "");
+  const project = await store.add(fixture.root);
+  const service = new LocalFileService(store);
+  const listWithSignal = service.listWithSignal.bind(service);
+  service.listWithSignal = async (...arguments_) => {
+    if (arguments_[1] === "z-changing") {
+      await rm(changing, { recursive: true });
+      await writeFile(changing, "now a file");
+    }
+    return listWithSignal(...arguments_);
+  };
+  const response = await service.search(
+    project.id, "search-changing-directory", "needle", 10, new AbortController().signal,
+  );
+  assert.deepEqual(response.results.map((entry) => entry.relativePath), ["needle-before.txt"]);
+  assert.equal(response.hasMore, true);
+});
+
 test("directory replacement cannot race a read outside the registered root", async (context) => {
   const fixture = await createFixture(context);
   const outside = join(fixture.base, "outside-race");
@@ -216,6 +351,17 @@ test("local IPC exposes project management and safe file operations", async (con
   assert.equal(binary.content, Buffer.from([1, 2, 3]).toString("base64"));
   const images = await jsonRequest(`${base}/projects/${created.id}/files/list-images`, "POST", { relativePath: "cover.png" });
   assert.deepEqual(images.entries.map((entry) => entry.relativePath), ["cover.png"]);
+  const search = await jsonRequest(`${base}/projects/${created.id}/files/search`, "POST", {
+    searchId: "device-1:search-1", query: "readme", limit: 20,
+  });
+  assert.deepEqual(search.results.map((entry) => entry.relativePath), ["README.md"]);
+  assert.equal(search.hasMore, false);
+  const cancel = await fetch(`${base}/projects/${created.id}/files/cancel-search`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ searchId: "device-1:search-1" }),
+  });
+  assert.equal(cancel.status, 204);
   const oversized = await fetch(`${base}/projects/${created.id}/files/read-text`, {
     method: "POST",
     headers: { "content-type": "application/json" },

@@ -174,5 +174,6 @@ int main(int argc, char **argv) {
   if (saved_errno == EFBIG) return 10;
   if (saved_errno == ENOENT) return 11;
   if (saved_errno == ELOOP) return 12;
+  if (saved_errno == ENOTDIR) return 13;
   return 1;
 }

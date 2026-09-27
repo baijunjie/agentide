@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { LocalFileService } from "./file-service.js";
+import { FileSearchError, LocalFileService } from "./file-service.js";
 import { GitServiceError, LocalGitService } from "./git-service.js";
 import { ProjectStore } from "./project-store.js";
 import { SessionManager } from "./session-manager.js";
@@ -14,13 +14,14 @@ export function createAgentHostServer(
   options: AgentHostServerOptions = {},
 ) {
   const files = new LocalFileService(projects);
+  const searches = new FileSearchTasks();
   const git = new LocalGitService(projects);
   return createServer((request, response) => {
     if (!isAuthorized(request, options.authenticationToken)) {
       sendJSON(response, 401, { error: "Unauthorized" });
       return;
     }
-    void route(request, response, projects, files, git, sessions).catch((error: unknown) => {
+    void route(request, response, projects, files, searches, git, sessions).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Unexpected error";
       sendJSON(response, statusFor(error), { error: message, code: errorCode(error) });
     });
@@ -37,6 +38,7 @@ async function route(
   response: ServerResponse,
   projects: ProjectStore,
   files: LocalFileService,
+  searches: FileSearchTasks,
   git: LocalGitService,
   sessions: SessionManager,
 ): Promise<void> {
@@ -140,11 +142,28 @@ async function route(
     return;
   }
 
-  const fileMatch = /^\/projects\/([^/]+)\/files\/(list|read-text|read-binary|list-images)$/.exec(url.pathname);
+  const fileMatch = /^\/projects\/([^/]+)\/files\/(list|read-text|read-binary|list-images|search|cancel-search)$/.exec(url.pathname);
   if (fileMatch !== null && request.method === "POST") {
     const projectId = decodeURIComponent(fileMatch[1] ?? "");
     const operation = fileMatch[2];
-    const relativePath = requireString(await readJSON(request), "relativePath", true);
+    const body = await readJSON(request);
+    if (operation === "search") {
+      const searchId = requireString(body, "searchId");
+      sendJSON(response, 200, await searches.run(searchId, (signal) => files.search(
+        projectId,
+        searchId,
+        requireString(body, "query"),
+        requireInteger(body, "limit"),
+        signal,
+      )));
+      return;
+    }
+    if (operation === "cancel-search") {
+      searches.cancel(requireString(body, "searchId"));
+      response.writeHead(204).end();
+      return;
+    }
+    const relativePath = requireString(body, "relativePath", true);
     if (operation === "list") sendJSON(response, 200, { entries: await files.list(projectId, relativePath) });
     else if (operation === "read-text") sendJSON(response, 200, { content: await files.readText(projectId, relativePath) });
     else if (operation === "read-binary") {
@@ -207,7 +226,15 @@ function optionalStringArray(body: Record<string, unknown>, key: string): string
   return value;
 }
 
+function requireInteger(body: Record<string, unknown>, key: string): number {
+  const value = body[key];
+  if (!Number.isInteger(value)) throw new Error(`${key} must be an integer`);
+  return value as number;
+}
+
 function statusFor(error: unknown): number {
+  if (error instanceof FileSearchError && error.code === "search_cancelled") return 499;
+  if (error instanceof FileSearchError && error.code === "search_busy") return 503;
   if (error instanceof GitServiceError && error.code === "git_timeout") return 408;
   if (error instanceof GitServiceError && error.code === "git_output_too_large") return 413;
   if (error instanceof GitServiceError && error.code === "git_busy") return 503;
@@ -219,10 +246,62 @@ function statusFor(error: unknown): number {
 }
 
 function errorCode(error: unknown): string {
-  return error instanceof GitServiceError ? error.code : "request_failed";
+  if (error instanceof GitServiceError || error instanceof FileSearchError) return error.code;
+  return "request_failed";
 }
 
 function sendJSON(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(value));
+}
+
+export class FileSearchTasks {
+  private static readonly maxConcurrent = 4;
+  private static readonly tombstoneTtlMs = 30_000;
+  private static readonly maxTombstones = 1_024;
+  private readonly active = new Map<string, AbortController>();
+  private readonly cancelled = new Map<string, number>();
+
+  async run<T>(searchId: string, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    this.pruneCancelled();
+    if (this.cancelled.delete(searchId)) {
+      throw new FileSearchError("search_cancelled", "Search was cancelled before it started");
+    }
+    if (this.active.has(searchId)) {
+      throw new FileSearchError("search_invalid_request", "searchId is already active");
+    }
+    if (this.active.size >= FileSearchTasks.maxConcurrent) {
+      throw new FileSearchError("search_busy", "Too many file searches are active");
+    }
+    const controller = new AbortController();
+    this.active.set(searchId, controller);
+    try {
+      return await operation(controller.signal);
+    } finally {
+      if (this.active.get(searchId) === controller) this.active.delete(searchId);
+    }
+  }
+
+  cancel(searchId: string): void {
+    const controller = this.active.get(searchId);
+    if (controller !== undefined) {
+      controller.abort();
+      return;
+    }
+    this.pruneCancelled();
+    this.cancelled.set(searchId, Date.now() + FileSearchTasks.tombstoneTtlMs);
+    while (this.cancelled.size > FileSearchTasks.maxTombstones) {
+      const oldest = this.cancelled.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.cancelled.delete(oldest);
+    }
+  }
+
+  private pruneCancelled(): void {
+    const now = Date.now();
+    for (const [searchId, expiresAt] of this.cancelled) {
+      if (expiresAt > now) continue;
+      this.cancelled.delete(searchId);
+    }
+  }
 }

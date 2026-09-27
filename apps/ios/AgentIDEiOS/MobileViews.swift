@@ -89,6 +89,9 @@ struct FileBrowserContent: View {
     @State private var restorationQueue: [String] = []
     @State private var restoringPath: String?
     @State private var restoredRecoveryState = false
+    @State private var searchQuery = ""
+    @State private var searchDebounce: Task<Void, Never>?
+    @State private var locationError: String?
 
     init(project: RemoteProject, openText: @escaping (TextFileSelection) -> Void,
          openImage: @escaping (ImageFileSelection) -> Void) {
@@ -103,35 +106,201 @@ struct FileBrowserContent: View {
 
     var body: some View {
         List {
-            if connection.entries(projectId: project.id, path: "") == nil {
-                if connection.isLoading(projectId: project.id, path: "") { ProgressView() }
-                else if let error = connection.directoryError(projectId: project.id, path: "") {
-                    directoryError(error, path: "")
+            Section {
+                HStack {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search file names and paths", text: $searchQuery)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("file-search-field")
+                    if !searchQuery.isEmpty {
+                        Button {
+                            searchQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search")
+                    }
                 }
             }
-            ForEach(connection.entries(projectId: project.id, path: "") ?? [], id: \.relativePath) { entry in
-                FileTreeRow(
-                    project: project,
-                    entry: entry,
-                    depth: 0,
-                    expandedPaths: $expandedPaths,
-                    openText: openText,
-                    openImage: openImage
-                )
+
+            if let locationError {
+                Section {
+                    Label(locationError, systemImage: "folder.badge.questionmark")
+                        .foregroundStyle(.orange)
+                    Button("Dismiss") { self.locationError = nil }
+                }
+            }
+
+            if projectFileSearchQueryTrimmingWhiteSpace(searchQuery).isEmpty {
+                searchHistory
+                fileTree
+            } else {
+                searchContent
             }
         }
         .animation(.easeInOut(duration: 0.2), value: connection.files.count)
         .scrollPosition(id: $scrollPosition)
         .task {
             restoreRecoveryState()
+            _ = connection.fileSearchHistory(projectId: project.id)
             if connection.entries(projectId: project.id, path: "") == nil {
                 connection.requestFiles(projectId: project.id, relativePath: "")
             }
             restoreNavigationIfPossible()
         }
         .onChange(of: connection.files.count) { restoreNavigationIfPossible() }
+        .onChange(of: connection.directoryErrors.count) { restoreNavigationIfPossible() }
         .onChange(of: expandedPaths) { persistRecoveryState() }
         .onChange(of: scrollPosition) { persistRecoveryState() }
+        .onChange(of: searchQuery) { _, query in scheduleSearch(query) }
+        .onChange(of: connection.fileSearches[project.id]?.searchId) { _, searchId in
+            guard searchId != nil, let response = connection.fileSearch(projectId: project.id) else { return }
+            connection.recordFileSearch(projectId: project.id, query: response.query)
+        }
+        .onDisappear {
+            searchDebounce?.cancel()
+            connection.cancelFileSearch(projectId: project.id)
+        }
+    }
+
+    @ViewBuilder private var searchHistory: some View {
+        let history = connection.fileSearchHistories[project.id] ?? []
+        if !history.isEmpty {
+            Section("Recent Searches") {
+                ForEach(history, id: \.self) { query in
+                    Button {
+                        searchQuery = query
+                    } label: {
+                        Label(query, systemImage: "clock.arrow.circlepath")
+                    }
+                    .contextMenu {
+                        Button("Remove", role: .destructive) {
+                            connection.removeFileSearchHistory(projectId: project.id, query: query)
+                        }
+                    }
+                }
+                Button("Clear Search History", role: .destructive) {
+                    connection.clearFileSearchHistory(projectId: project.id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var fileTree: some View {
+        if connection.entries(projectId: project.id, path: "") == nil {
+            if connection.isLoading(projectId: project.id, path: "") { ProgressView() }
+            else if let error = connection.directoryError(projectId: project.id, path: "") {
+                directoryError(error, path: "")
+            }
+        }
+        ForEach(connection.entries(projectId: project.id, path: "") ?? [], id: \.relativePath) { entry in
+            FileTreeRow(
+                project: project,
+                entry: entry,
+                depth: 0,
+                expandedPaths: $expandedPaths,
+                openText: openText,
+                openImage: openImage
+            )
+        }
+    }
+
+    @ViewBuilder private var searchContent: some View {
+        let query = projectFileSearchQueryTrimmingWhiteSpace(searchQuery)
+        let scalarCount = query.unicodeScalars.count
+        if scalarCount < 2 {
+            ContentUnavailableView("Keep Typing", systemImage: "character.cursor.ibeam", description: Text("Enter at least two characters."))
+        } else if scalarCount > 256 {
+            ContentUnavailableView("Search Too Long", systemImage: "character.cursor.ibeam", description: Text("Enter no more than 256 characters."))
+        } else if connection.isSearchingFiles(projectId: project.id) {
+            ProgressView("Searching…").frame(maxWidth: .infinity)
+        } else if let error = connection.fileSearchError(projectId: project.id) {
+            ContentUnavailableView {
+                Label("Search Unavailable", systemImage: "exclamationmark.magnifyingglass")
+            } description: {
+                Text(error.message)
+            } actions: {
+                Button("Retry") { connection.searchFiles(projectId: project.id, query: query) }
+                    .buttonStyle(.borderedProminent)
+            }
+        } else if let response = connection.fileSearch(projectId: project.id) {
+            if response.results.isEmpty {
+                ContentUnavailableView.search(text: response.query)
+            } else {
+                Section {
+                    ForEach(response.results, id: \.relativePath) { entry in
+                        searchResult(entry)
+                    }
+                } footer: {
+                    if response.hasMore { Text("More matches exist. Narrow your search.") }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func searchResult(_ entry: FileEntry) -> some View {
+        let label = Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name).foregroundStyle(.primary)
+                Text(entry.relativePath).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
+        } icon: {
+            Image(systemName: searchResultIcon(entry)).foregroundStyle(entry.type == .directory ? .blue : .secondary)
+        }
+        Group {
+            if entry.type == .directory {
+                Button { locateDirectory(entry.relativePath) } label: { label }
+            } else if entry.isImage == true {
+                Button { openImage(.init(project: project, entry: entry)) } label: { label }
+            } else if entry.isText == true {
+                Button { openText(.init(project: project, entry: entry)) } label: { label }
+            } else {
+                label
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Copy Name") { UIPasteboard.general.string = entry.name }
+            Button("Copy Relative Path") { UIPasteboard.general.string = entry.relativePath }
+        }
+        .accessibilityIdentifier("file-search-result")
+    }
+
+    private func scheduleSearch(_ query: String) {
+        searchDebounce?.cancel()
+        connection.clearFileSearch(projectId: project.id)
+        guard let normalized = normalizedProjectFileSearchQuery(query) else { return }
+        searchDebounce = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            connection.searchFiles(projectId: project.id, query: normalized)
+        }
+    }
+
+    private func locateDirectory(_ path: String) {
+        searchQuery = ""
+        locationError = nil
+        var prefixes: [String] = []
+        var current = ""
+        for component in path.split(separator: "/") {
+            current = current.isEmpty ? String(component) : "\(current)/\(component)"
+            prefixes.append(current)
+        }
+        expandedPaths.formUnion(prefixes)
+        restorationQueue = prefixes
+        pendingScrollPosition = path
+        restoringPath = nil
+        restoreNavigationIfPossible()
+    }
+
+    private func searchResultIcon(_ entry: FileEntry) -> String {
+        if entry.type == .directory { return "folder" }
+        if entry.isImage == true { return "photo" }
+        if entry.extension?.lowercased() == "md" { return "doc.richtext" }
+        if entry.isText == true { return "doc.text" }
+        return "doc"
     }
     private func directoryError(_ message: String, path: String) -> some View {
         VStack(spacing: 8) {
@@ -162,8 +331,20 @@ struct FileBrowserContent: View {
 
     private func restoreNavigationIfPossible() {
         if let restoringPath {
-            guard connection.entries(projectId: project.id, path: restoringPath) != nil else { return }
-            self.restoringPath = nil
+            let resolution = FileBrowserRestoringPathResolution.resolve(
+                hasError: connection.directoryError(projectId: project.id, path: restoringPath) != nil,
+                hasEntries: connection.entries(projectId: project.id, path: restoringPath) != nil
+            )
+            switch resolution {
+            case .unavailable:
+                self.restoringPath = nil
+                removeUnavailablePath(restoringPath)
+                locationError = "The folder is no longer available. Search again to refresh results."
+            case .loaded:
+                self.restoringPath = nil
+            case .waiting:
+                return
+            }
         }
 
         while let nextPath = restorationQueue.first {
@@ -172,6 +353,7 @@ struct FileBrowserContent: View {
             restorationQueue.removeFirst()
             guard parentEntries.contains(where: { $0.relativePath == nextPath && $0.type == .directory }) else {
                 removeUnavailablePath(nextPath)
+                locationError = "The folder is no longer available. Search again to refresh results."
                 continue
             }
             if connection.entries(projectId: project.id, path: nextPath) == nil {
@@ -254,6 +436,17 @@ struct FileBrowserRestorationState: Equatable {
             pendingScrollPosition: FileBrowserRecoveryState.isInSubtree(pendingScrollPosition, rootedAt: path) ? nil : pendingScrollPosition,
             restorationQueue: restorationQueue.filter { !FileBrowserRecoveryState.isInSubtree($0, rootedAt: path) }
         )
+    }
+}
+
+enum FileBrowserRestoringPathResolution: Equatable {
+    case waiting
+    case loaded
+    case unavailable
+
+    static func resolve(hasError: Bool, hasEntries: Bool) -> Self {
+        if hasError { return .unavailable }
+        return hasEntries ? .loaded : .waiting
     }
 }
 

@@ -196,6 +196,54 @@ private func fixture(named name: String) throws -> Data {
     }
 }
 
+@Test func projectSearchFixturesEnforceDTOBoundaries() throws {
+    struct Fixtures: Decodable {
+        let projectSearchFilesRequest: ProjectSearchFilesRequest
+        let projectCancelSearchRequest: ProjectCancelSearchRequest
+        let projectSearchFilesResponse: ProjectSearchFilesResponse
+    }
+
+    let fixtures = try JSONDecoder().decode(Fixtures.self, from: fixture(named: "project-search"))
+    #expect(fixtures.projectSearchFilesRequest.limit == 50)
+    #expect(fixtures.projectCancelSearchRequest.searchId == "search-1")
+    #expect(fixtures.projectSearchFilesResponse.results.first?.relativePath == "docs/README.md")
+
+    #expect(throws: (any Error).self) {
+        _ = try JSONDecoder().decode(
+            ProjectSearchFilesRequest.self,
+            from: fixture(named: "project-search-invalid-limit")
+        )
+    }
+    for name in ["project-search-invalid-query", "project-search-invalid-unicode-whitespace", "project-search-invalid-extra-field"] {
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(ProjectSearchFilesRequest.self, from: fixture(named: name))
+        }
+    }
+    for name in ["project-search-valid-feff", "project-search-valid-zero-width-space"] {
+        _ = try JSONDecoder().decode(ProjectSearchFilesRequest.self, from: fixture(named: name))
+    }
+    for name in ["project-search-invalid-result-extra-field", "project-search-invalid-result-size", "project-search-invalid-result-null"] {
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(ProjectSearchFilesResponse.self, from: fixture(named: name))
+        }
+    }
+
+    let oversizedResponse: [String: Any] = [
+        "searchId": "search-1",
+        "query": "readme",
+        "results": Array(repeating: [
+            "name": "README.md", "relativePath": "README.md", "type": "file"
+        ], count: 101),
+        "hasMore": true,
+    ]
+    #expect(throws: (any Error).self) {
+        _ = try JSONDecoder().decode(
+            ProjectSearchFilesResponse.self,
+            from: JSONSerialization.data(withJSONObject: oversizedResponse)
+        )
+    }
+}
+
 @Test func sessionSnapshotFixturePreservesAllPendingInteractions() throws {
     let decoder = JSONDecoder()
     let snapshot = try decoder.decode(SessionSnapshot.self, from: fixture(named: "session-snapshot"))

@@ -1,0 +1,11 @@
+{
+  "searchId": "search-1",
+  "query": "readme",
+  "results": [{
+    "name": "README.md",
+    "relativePath": "README.md",
+    "type": "file",
+    "size": -1
+  }],
+  "hasMore": false
+}

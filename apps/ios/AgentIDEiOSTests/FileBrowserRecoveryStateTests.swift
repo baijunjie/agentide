@@ -87,16 +87,17 @@ final class FileBrowserRecoveryStateTests: XCTestCase {
 
     func testMissingDirectoryRemovesDescendantsAndAdvancesRecoveryQueue() {
         let restored = FileBrowserRestorationState(
-            expandedPaths: ["src", "src/deleted", "src/deleted/nested"],
+            expandedPaths: ["src", "src/deleted", "src/deleted/nested", "docs"],
             pendingScrollPosition: "src/deleted/nested/file.swift",
-            restorationQueue: ["src/deleted", "src/deleted/nested"]
+            restorationQueue: ["src/deleted", "src/deleted/nested", "docs"]
         )
 
         let recovered = restored.removingUnavailable("src/deleted")
 
-        XCTAssertEqual(recovered.expandedPaths, ["src"])
+        XCTAssertEqual(recovered.expandedPaths, ["src", "docs"])
         XCTAssertNil(recovered.pendingScrollPosition)
-        XCTAssertTrue(recovered.restorationQueue.isEmpty)
+        XCTAssertEqual(recovered.restorationQueue, ["docs"])
+        XCTAssertEqual(FileBrowserRestoringPathResolution.resolve(hasError: true, hasEntries: false), .unavailable)
     }
 
     func testCompletedActiveSessionSurvivesCountAndByteEviction() throws {

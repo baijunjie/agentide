@@ -38,6 +38,23 @@ export interface FileEntry {
   isImage?: boolean;
 }
 
+export interface ProjectSearchFilesRequest {
+  searchId: string;
+  query: string;
+  limit: number;
+}
+
+export interface ProjectCancelSearchRequest {
+  searchId: string;
+}
+
+export interface ProjectSearchFilesResponse {
+  searchId: string;
+  query: string;
+  results: FileEntry[];
+  hasMore: boolean;
+}
+
 export type GitChangeKind = "added" | "modified" | "deleted" | "renamed" | "untracked";
 
 export type GitChangeArea = "staged" | "unstaged";

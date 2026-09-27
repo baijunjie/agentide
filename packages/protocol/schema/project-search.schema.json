@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentide.local/schema/project-search.schema.json",
+  "$defs": {
+    "projectSearchFilesRequest": {
+      "type": "object",
+      "required": ["searchId", "query", "limit"],
+      "properties": {
+        "searchId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "query": { "type": "string", "minLength": 2, "maxLength": 256, "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000](?:[\\s\\S]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000])?$" },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+      },
+      "additionalProperties": false
+    },
+    "projectCancelSearchRequest": {
+      "type": "object",
+      "required": ["searchId"],
+      "properties": { "searchId": { "type": "string", "minLength": 1, "maxLength": 128 } },
+      "additionalProperties": false
+    },
+    "projectSearchFilesResponse": {
+      "type": "object",
+      "required": ["searchId", "query", "results", "hasMore"],
+      "properties": {
+        "searchId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "query": { "type": "string", "minLength": 2, "maxLength": 256, "pattern": "^[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000](?:[\\s\\S]*[^\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000])?$" },
+        "results": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "shared-types.schema.json#/$defs/fileEntry" }
+        },
+        "hasMore": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

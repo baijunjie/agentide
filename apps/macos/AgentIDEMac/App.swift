@@ -1,6 +1,7 @@
 import AgentIDEProtocol
 import AppKit
 import CoreImage.CIFilterBuiltins
+import CryptoKit
 import Security
 import SwiftUI
 
@@ -15,6 +16,7 @@ struct AgentIDEMacApp: App {
 @MainActor
 final class MacConnection: ObservableObject {
     private struct EventStreamKey: Hashable { let targetDeviceId: String; let sessionId: String }
+    private struct FileSearchKey: Hashable { let sourceDeviceId: String; let searchId: String }
     struct Pairing: Decodable { let expiresAt: String; let qrPayload: String; let secret: String }
     struct Device: Decodable, Identifiable { let id: String; let name: String; let online: Bool }
     struct DeviceList: Decodable { let devices: [Device] }
@@ -24,6 +26,8 @@ final class MacConnection: ObservableObject {
     struct FileContent: Decodable { let content: String }
     struct SessionList: Decodable { let sessions: [Session] }
     struct EventList: Decodable { let events: [AgentEvent] }
+    private struct HostSearchRequest: Encodable { let searchId: String; let query: String; let limit: Int }
+    private struct HostSearchResponse: Decodable { let query: String; let results: [FileEntry]; let hasMore: Bool }
 
     @Published var server = UserDefaults.standard.string(forKey: "relayServer") ?? "http://127.0.0.1:8787"
     @Published var pairing: Pairing?
@@ -39,6 +43,8 @@ final class MacConnection: ObservableObject {
     private var acknowledgedEventSequences: [EventStreamKey: Int] = [:]
     private var sentEventSequences: [EventStreamKey: Int] = [:]
     private var sessionStreamGenerations: [EventStreamKey: Int] = [:]
+    private var fileSearchTasks: [FileSearchKey: Task<Void, Never>] = [:]
+    private var fileSearchTokens: [FileSearchKey: UUID] = [:]
     private let agentHost = AgentHostSupervisor()
 
     init() {
@@ -165,6 +171,70 @@ final class MacConnection: ObservableObject {
                 let entries = try JSONSerialization.jsonObject(with: JSONEncoder().encode(list.entries))
                 sendResponse(to: source, replyTo: requestId, type: "project.listFiles.response", projectId: projectId, payload: ["relativePath": path, "entries": entries])
             } catch { sendResponse(to: source, replyTo: requestId, type: "project.listFiles.response", projectId: projectId, error: error.localizedDescription) }
+        } else if type == "project.searchFiles" {
+            guard let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any],
+                  let payloadData = try? JSONSerialization.data(withJSONObject: payload),
+                  let search = try? JSONDecoder().decode(ProjectSearchFilesRequest.self, from: payloadData) else {
+                sendResponse(to: source, replyTo: requestId, type: "project.searchFiles.response", error: "Invalid project.searchFiles request")
+                return
+            }
+            let key = fileSearchKey(source: source, searchId: search.searchId)
+            let token = UUID()
+            let hostSearchID = fileSearchHostID(source: source, searchId: search.searchId)
+            fileSearchTasks[key]?.cancel()
+            fileSearchTokens[key] = token
+            fileSearchTasks[key] = Task { [weak self] in
+                guard let self else { return }
+                defer {
+                    if fileSearchTokens[key] == token {
+                        fileSearchTokens.removeValue(forKey: key)
+                        fileSearchTasks.removeValue(forKey: key)
+                    }
+                }
+                do {
+                    try Task.checkCancellation()
+                    guard fileSearchTokens[key] == token else { return }
+                    let response: HostSearchResponse = try await hostRequest(
+                        "/projects/\(projectId)/files/search",
+                        method: "POST",
+                        body: HostSearchRequest(searchId: hostSearchID, query: search.query, limit: search.limit)
+                    )
+                    guard !Task.isCancelled, fileSearchTokens[key] == token else { return }
+                    let results = try JSONSerialization.jsonObject(with: JSONEncoder().encode(response.results))
+                    sendResponse(to: source, replyTo: requestId, type: "project.searchFiles.response", projectId: projectId,
+                                 payload: ["searchId": search.searchId, "query": response.query, "results": results, "hasMore": response.hasMore])
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard !Task.isCancelled, fileSearchTokens[key] == token else { return }
+                    sendResponse(to: source, replyTo: requestId, type: "project.searchFiles.response", projectId: projectId,
+                                 error: error.localizedDescription, errorCode: "project_search_failed")
+                }
+            }
+        } else if type == "project.cancelSearch" {
+            guard let projectId = message["projectId"] as? String,
+                  let payload = message["payload"] as? [String: Any],
+                  let payloadData = try? JSONSerialization.data(withJSONObject: payload),
+                  let cancel = try? JSONDecoder().decode(ProjectCancelSearchRequest.self, from: payloadData) else {
+                sendResponse(to: source, replyTo: requestId, type: "project.cancelSearch.response", error: "Invalid project.cancelSearch request")
+                return
+            }
+            let key = fileSearchKey(source: source, searchId: cancel.searchId)
+            fileSearchTasks.removeValue(forKey: key)?.cancel()
+            fileSearchTokens.removeValue(forKey: key)
+            let hostSearchID = fileSearchHostID(source: source, searchId: cancel.searchId)
+            do {
+                let _: EmptyResponse = try await hostRequest(
+                    "/projects/\(projectId)/files/cancel-search",
+                    method: "POST",
+                    body: ["searchId": hostSearchID]
+                )
+                sendResponse(to: source, replyTo: requestId, type: "project.cancelSearch.response", projectId: projectId, payload: [:])
+            } catch {
+                sendResponse(to: source, replyTo: requestId, type: "project.cancelSearch.response", projectId: projectId,
+                             error: error.localizedDescription, errorCode: "project_search_failed")
+            }
         } else if type == "project.readFile" {
             guard let projectId = message["projectId"] as? String,
                   let payload = message["payload"] as? [String: Any], let path = payload["relativePath"] as? String,
@@ -543,6 +613,16 @@ final class MacConnection: ObservableObject {
         }
         if Response.self == EmptyResponse.self { return EmptyResponse() as! Response }
         return try JSONDecoder().decode(Response.self, from: data)
+    }
+
+    private func fileSearchKey(source: String, searchId: String) -> FileSearchKey {
+        FileSearchKey(sourceDeviceId: source, searchId: searchId)
+    }
+
+    private func fileSearchHostID(source: String, searchId: String) -> String {
+        let sourceLength = source.lengthOfBytes(using: .utf8)
+        let digest = SHA256.hash(data: Data("\(sourceLength):\(source)\(searchId)".utf8))
+        return "search-" + digest.map { String(format: "%02x", $0) }.joined()
     }
 }
 

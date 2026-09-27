@@ -1,0 +1,6 @@
+{
+  "searchId": "search-1",
+  "query": "readme",
+  "limit": 50,
+  "cursor": "unexpected"
+}

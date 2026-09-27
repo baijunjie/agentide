@@ -2,7 +2,7 @@
 
 ## macOS 客户端
 
-`apps/macos/` 是 SwiftUI macOS 应用入口，依赖本地 `AgentIDEProtocol` Swift Package。应用登记并保存稳定的本机设备身份，生成短期配对二维码，管理已配对的 iPhone 和 Agent Host 中的本机项目。它持有 Mac 唯一的 Relay 连接，通过该连接响应项目、只读 Git 审查与会话请求，并按目标设备和会话游标重传未确认的 Agent 事件；随包的 Agent Host companion 由应用启动、鉴权、监督和清理。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，项目行为见 [项目登记与文件浏览](../docs/product/project-files.md)，Git 审查行为见 [Git 变更与统一 Diff 审查](../docs/product/git-changes.md)，本地执行进程与会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
+`apps/macos/` 是 SwiftUI macOS 应用入口，依赖本地 `AgentIDEProtocol` Swift Package。应用登记并保存稳定的本机设备身份，生成短期配对二维码，管理已配对的 iPhone 和 Agent Host 中的本机项目。它持有 Mac 唯一的 Relay 连接，通过该连接响应项目文件浏览与搜索、只读 Git 审查及会话请求，并按目标设备和会话游标重传未确认的 Agent 事件；随包的 Agent Host companion 由应用启动、鉴权、监督和清理。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，项目行为见 [项目登记与文件浏览](../docs/product/project-files.md)，Git 审查行为见 [Git 变更与统一 Diff 审查](../docs/product/git-changes.md)，本地执行进程与会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外入口：
 
@@ -10,7 +10,7 @@
 
 ## iOS 客户端
 
-`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并提供 Projects → Session List → Agent Session 主流程；会话界面负责创建 Claude/Codex 会话、呈现统一 Activity Feed、发送与取消轮次、回应审批和问题，并从会话工作流进入项目文件浏览或 Git Changes/Diff 审查。它还解码、排序并确认 Agent 事件，在连接恢复时续订未结束的事件流。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)，Git 审查行为见 [Git 变更与统一 Diff 审查](../docs/product/git-changes.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
+`apps/ios/` 是 SwiftUI iOS 应用入口，依赖同一个 `AgentIDEProtocol` Swift Package。应用扫描 Mac 生成的二维码完成绑定，连接 Relay，根据 Presence 显示 Mac 在线状态，并提供 Projects → Session List → Agent Session 主流程；会话界面负责创建 Claude/Codex 会话、呈现统一 Activity Feed、发送与取消轮次、回应审批和问题，并从会话工作流进入带搜索能力的项目文件浏览或 Git Changes/Diff 审查。它还解码、排序并确认 Agent 事件，在连接恢复时续订未结束的事件流。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，文件浏览行为见 [项目登记与文件浏览](../docs/product/project-files.md)，Git 审查行为见 [Git 变更与统一 Diff 审查](../docs/product/git-changes.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外入口：
 
@@ -23,7 +23,7 @@ DEBUG 构建可用启动参数 `-mobileScenario <场景名>` 或 `--mobile-scena
 
 | 场景名 | 行为 |
 | --- | --- |
-| `comprehensive` | 提供项目、会话、会话创建、消息发送与取消、审批、提问、文本和图片文件浏览的完整闭环。 |
+| `comprehensive` | 提供项目、会话、会话创建、消息发送与取消、审批、提问、文件浏览与搜索、文本和图片查看的完整闭环。 |
 | `offline` | 以已配对但 Mac 离线的状态启动，不提供远端项目。 |
 | `request-failure` | 为请求返回带 `replyTo` 的确定性失败响应。 |
 | `timeout` | 不返回请求响应，用于验证正式超时处理。 |
@@ -32,8 +32,11 @@ DEBUG 构建可用启动参数 `-mobileScenario <场景名>` 或 `--mobile-scena
 | `not-git` | 返回非 Git 项目的 Changes 空状态。 |
 | `binary` | 返回不携带文本 diff 的二进制变更。 |
 | `too-large` | 为 Diff 请求返回确定性的超限错误。 |
+| `search-empty` | 为项目文件搜索返回确定性的空结果。 |
+| `search-limited` | 返回带 `hasMore` 的有界搜索结果。 |
+| `search-missing-directory` | 返回随后从文件树消失的目录搜索结果，用于验证定位失败、可恢复提示和无效恢复状态清理。 |
 
-场景实现位于 `apps/ios/AgentIDEiOS/MobileScenario.swift`。自动化测试分别直接验证场景 Envelope 契约、场景经过 `MobileConnection` 后的状态，以及通过真实 SwiftUI 界面完成会话创建、发送与取消、审批、问题提交、文件浏览和 Changes/Diff 审查。
+场景实现位于 `apps/ios/AgentIDEiOS/MobileScenario.swift`。自动化测试分别直接验证场景 Envelope 契约、场景经过 `MobileConnection` 后的状态，以及通过真实 SwiftUI 界面完成会话创建、发送与取消、审批、问题提交、文件浏览与搜索、Changes/Diff 审查。
 
 ## Relay Server
 
@@ -59,12 +62,14 @@ DEBUG 构建可用启动参数 `-mobileScenario <场景名>` 或 `--mobile-scena
 
 ## Agent Host
 
-`apps/agent-host/` 是随 macOS 应用分发的本地 Agent 执行进程边界。它持久化 Mac 明确登记的项目、统一会话和规范化事件，通过 loopback HTTP IPC 提供项目管理、会话管理、受根目录约束的文件访问和固定参数的只读 Git 查询；本地组合默认装配 Claude 与 Codex Adapter，`AgentHost` 也可通过依赖注入组合文件访问、Relay 连接和具体 Agent 集成。macOS 应用使用每次启动新生成的凭据鉴权全部 IPC，并监督进程生命周期。项目与文件访问规则见 [项目登记与文件浏览](../docs/product/project-files.md)，Git 审查规则见 [Git 变更与统一 Diff 审查](../docs/product/git-changes.md)，进程生命周期、会话执行与恢复规则见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
+`apps/agent-host/` 是随 macOS 应用分发的本地 Agent 执行进程边界。它持久化 Mac 明确登记的项目、统一会话和规范化事件，通过 loopback HTTP IPC 提供项目管理、会话管理、受项目根目录约束的文件浏览与搜索，以及固定参数的只读 Git 查询；本地组合默认装配 Claude 与 Codex Adapter，`AgentHost` 也可通过依赖注入组合文件访问、Relay 连接和具体 Agent 集成。macOS 应用使用每次启动新生成的凭据鉴权全部 IPC，并监督进程生命周期。项目与文件访问规则见 [项目登记与文件浏览](../docs/product/project-files.md)，Git 审查规则见 [Git 变更与统一 Diff 审查](../docs/product/git-changes.md)，进程生命周期、会话执行与恢复规则见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外接口：
 
-- `FileService`：定义 `list()`、`readText()`、`readBinary()` 和 `listSiblingImages()` 文件访问边界。
-- `LocalFileService`：`FileService` 的本地文件系统实现，提供目录列举、文本读取、二进制读取和同目录图片列举。
+- `FileService`：定义 `list()`、`search()`、`readText()`、`readBinary()` 和 `listSiblingImages()` 文件访问边界。
+- `LocalFileService`：`FileService` 的本地文件系统实现，提供目录列举、项目文件搜索、文本读取、二进制读取和同目录图片列举。
+- `FileSearchError`、`FileSearchLimits`：搜索繁忙、取消或无效请求的稳定错误，以及遍历条目、执行时间与响应大小边界。
+- `FileSearchTasks`：按 `searchId` 登记、替换或取消搜索任务，并限制同时执行的不同搜索。
 - `LocalGitService`：按已登记项目执行固定的只读 Git 状态与统一 diff 查询。
 - `GitServiceError`、`GitArea`：只读 Git 查询的稳定错误与 staged/unstaged 区域边界。
 - `ProjectStore`：持久化项目登记，提供 `list()`、`get()`、`add()`、`rename()` 和 `remove()`；随包可用的 Claude 始终启用，Codex 则按 `PATH` 中的可执行文件检测。
@@ -86,6 +91,7 @@ DEBUG 构建可用启动参数 `-mobileScenario <场景名>` 或 `--mobile-scena
 - `POST /sessions/:sessionId/messages`、`POST /sessions/:sessionId/cancel`：发送后续文本消息，或取消当前轮次。
 - `POST /sessions/:sessionId/interactions`：回应待处理审批或问题；审批使用 `approve_once`、`approve_session` 或 `reject`，问题可提交选项 ID、自由文本或两者。
 - `POST /projects/:projectId/files/list`：列出项目根目录或其子目录。
+- `POST /projects/:projectId/files/search`、`POST /projects/:projectId/files/cancel-search`：执行受限项目文件搜索，或按 `searchId` 协作取消仍在进行的遍历。
 - `POST /projects/:projectId/files/read-text`、`POST /projects/:projectId/files/read-binary`：读取项目内文本，或以 Base64 返回二进制文件。
 - `POST /projects/:projectId/files/list-images`：列出指定文件同目录的图片。
 - `POST /projects/:projectId/changes`：列出项目当前 staged 与 unstaged 变更；非 Git 项目返回 `isGitRepository: false`。
@@ -99,7 +105,8 @@ macOS 随包构建：
 
 文件访问实现边界：
 
-- `LocalFileService` 负责校验项目 ID 与相对路径、标注文件类型，并调用随包构建的 `native/file-access.c` helper；helper 才执行目录列举和文件读取。
+- `LocalFileService` 负责校验项目 ID 与相对路径、标注文件类型，并调用随包构建的 `native/file-access.c` helper；helper 执行目录列举和文件读取，文件搜索在受限目录列举之上递归完成。
+- `FileSearchTasks` 最多同时执行四个不同 `searchId` 的搜索；超额请求不进入等待队列，返回 HTTP 503 与 `search_busy`。仍在执行的 `searchId` 不能重复启动，重复请求返回 `search_invalid_request`；短时乱序窗口内先于搜索到达的取消会阻止对应任务随后启动。
 - helper 从文件系统根目录描述符开始，逐段打开登记根路径和项目内相对路径且不跟随符号链接，避免根路径祖先或项目内路径在检查与实际打开之间被并发替换。默认忽略路径在 TypeScript 授权层和 helper 中都会拒绝；修改忽略集合时必须保持两处一致。
 - helper 将单次文件读取限制为最多 700 KiB 原始字节，并在读取过程中再次守住该上限，以免文件在打开后增长导致响应越界。
 - `pnpm --filter @agentide/agent-host build` 除编译 TypeScript 外，还要求系统提供 `cc`，并把 helper 构建为 `dist/native/file-access`；运行 Agent Host 前必须保留该相对位置。

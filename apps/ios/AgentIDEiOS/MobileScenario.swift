@@ -11,6 +11,9 @@ enum MobileScenario: String, CaseIterable {
     case notGit = "not-git"
     case binary
     case tooLarge = "too-large"
+    case searchEmpty = "search-empty"
+    case searchLimited = "search-limited"
+    case searchMissingDirectory = "search-missing-directory"
 
     static func fromLaunchArguments(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> MobileScenario? {
 #if DEBUG
@@ -52,10 +55,13 @@ final class MobileScenarioRuntime {
     private var deferredInbound: [Data] = []
     private(set) var sentMessages: [ScenarioSentMessage] = []
     private var heldChangesRequests: [String: [String: Any]] = [:]
+    private var heldSearchRequests: [String: [String: Any]] = [:]
     private var requests: [String: [String: Any]] = [:]
     private(set) var requestIdsByType: [String: [String]] = [:]
     var holdsChangesResponses = false
     var holdsDiffResponses = false
+    var holdsSearchResponses = false
+    private(set) var cancelledSearchIds: [String] = []
 
     let presence: MobileScenarioPresence
 
@@ -101,6 +107,14 @@ final class MobileScenarioRuntime {
             return []
         }
         if type == "project.readDiff", holdsDiffResponses { return [] }
+        if type == "project.searchFiles", holdsSearchResponses {
+            heldSearchRequests[requestId] = request
+            return []
+        }
+        if type == "project.cancelSearch" {
+            let searchId = ((request["payload"] as? [String: Any])?["searchId"] as? String) ?? ""
+            cancelledSearchIds.append(searchId)
+        }
         if scenario == .offline {
             return [failure(for: request, type: "\(type).response", replyTo: requestId, code: "MAC_OFFLINE", message: "Mac is offline")]
         }
@@ -177,7 +191,15 @@ final class MobileScenarioRuntime {
             return [success(for: request, type: "interaction.respond.response", replyTo: requestId, payload: [:])]
         case "project.listFiles":
             let path = ((request["payload"] as? [String: Any])?["relativePath"] as? String) ?? ""
-            return [success(for: request, type: "project.listFiles.response", replyTo: requestId, payload: ["relativePath": path, "entries": entries(at: path)])]
+            if scenario == .searchMissingDirectory, path == "Deleted" {
+                return [failure(for: request, type: "project.listFiles.response", replyTo: requestId,
+                                code: "NOT_FOUND", message: "Folder no longer exists")]
+            }
+            var listedEntries = entries(at: path)
+            if scenario == .searchMissingDirectory, path.isEmpty {
+                listedEntries.append(directory(name: "Deleted", path: "Deleted"))
+            }
+            return [success(for: request, type: "project.listFiles.response", replyTo: requestId, payload: ["relativePath": path, "entries": listedEntries])]
         case "project.readFile":
             let path = ((request["payload"] as? [String: Any])?["relativePath"] as? String) ?? "README.md"
             let encoding = ((request["payload"] as? [String: Any])?["encoding"] as? String) ?? "utf8"
@@ -189,6 +211,34 @@ final class MobileScenarioRuntime {
             let path = ((request["payload"] as? [String: Any])?["relativePath"] as? String) ?? "assets/logo.png"
             let image = file(name: "logo.png", path: path, image: true)
             return [success(for: request, type: "project.listImages.response", replyTo: requestId, payload: ["current": image, "siblings": [image]])]
+        case "project.searchFiles":
+            let payload = request["payload"] as? [String: Any] ?? [:]
+            let searchId = payload["searchId"] as? String ?? ""
+            let query = payload["query"] as? String ?? ""
+            if scenario == .searchEmpty {
+                return [searchResponse(for: request, replyTo: requestId, searchId: searchId, query: query, results: [], hasMore: false)]
+            }
+            if scenario == .searchMissingDirectory {
+                return [searchResponse(for: request, replyTo: requestId, searchId: searchId, query: query,
+                                       results: [directory(name: "Deleted", path: "Deleted")], hasMore: false)]
+            }
+            let allResults = searchEntries().filter { entry in
+                let name = entry["name"] as? String ?? ""
+                let path = entry["relativePath"] as? String ?? ""
+                return name.localizedCaseInsensitiveContains(query) || path.localizedCaseInsensitiveContains(query)
+            }
+            let limit = payload["limit"] as? Int ?? 50
+            let responseResults = scenario == .searchLimited ? Array(allResults.prefix(max(1, min(limit, 2)))) : Array(allResults.prefix(limit))
+            return [searchResponse(
+                for: request,
+                replyTo: requestId,
+                searchId: searchId,
+                query: query,
+                results: responseResults,
+                hasMore: scenario == .searchLimited || allResults.count > responseResults.count
+            )]
+        case "project.cancelSearch":
+            return [success(for: request, type: "project.cancelSearch.response", replyTo: requestId, payload: [:])]
         case "project.listChanges":
             let changes: [[String: Any]] = scenario == .clean || scenario == .notGit ? [] : [
                 gitChange(path: "Sources/App.swift", kind: "modified", area: "unstaged"),
@@ -225,6 +275,29 @@ final class MobileScenarioRuntime {
                        payload: ["isGitRepository": isGitRepository, "changes": changes])
     }
 
+    func respondToHeldSearch(_ requestId: String, results: [[String: Any]], hasMore: Bool = false) -> Data? {
+        guard let request = heldSearchRequests.removeValue(forKey: requestId),
+              let payload = request["payload"] as? [String: Any],
+              let searchId = payload["searchId"] as? String,
+              let query = payload["query"] as? String else { return nil }
+        return searchResponse(for: request, replyTo: requestId, searchId: searchId, query: query, results: results, hasMore: hasMore)
+    }
+
+    func failHeldSearch(_ requestId: String, message: String = "Search failed") -> Data? {
+        guard let request = heldSearchRequests.removeValue(forKey: requestId) else { return nil }
+        return failure(for: request, type: "project.searchFiles.response", replyTo: requestId,
+                       code: "PROJECT_SEARCH_FAILED", message: message)
+    }
+
+    func failureResponse(for requestId: String, type: String, code: String, message: String) -> Data? {
+        guard let request = requests[requestId] else { return nil }
+        return failure(for: request, type: type, replyTo: requestId, code: code, message: message)
+    }
+
+    func searchEntry(name: String, path: String, directory: Bool = false, image: Bool = false) -> [String: Any] {
+        directory ? self.directory(name: name, path: path) : file(name: name, path: path, image: image)
+    }
+
     func change(path: String, area: String = "unstaged", binary: Bool = false) -> [String: Any] {
         gitChange(path: path, kind: "modified", area: area, binary: binary)
     }
@@ -236,6 +309,22 @@ final class MobileScenarioRuntime {
 
     private func project() -> [String: Any] {
         ["id": "project-demo", "name": "Scenario Workspace", "createdAt": "2026-09-27T00:00:00.000Z", "enabledAgents": ["codex", "claude"], "online": true]
+    }
+
+    private func searchResponse(
+        for request: [String: Any],
+        replyTo: String,
+        searchId: String,
+        query: String,
+        results: [[String: Any]],
+        hasMore: Bool
+    ) -> Data {
+        success(for: request, type: "project.searchFiles.response", replyTo: replyTo,
+                payload: ["searchId": searchId, "query": query, "results": results, "hasMore": hasMore])
+    }
+
+    private func searchEntries() -> [[String: Any]] {
+        entries(at: "") + entries(at: "Sources") + entries(at: "assets")
     }
 
     private func snapshot(session: [String: Any], sessionId: String) -> [String: Any] {

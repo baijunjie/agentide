@@ -5,6 +5,28 @@ import Security
 import SwiftUI
 import UIKit
 
+func normalizedProjectFileSearchQuery(_ query: String) -> String? {
+    let normalized = projectFileSearchQueryTrimmingWhiteSpace(query)
+    return (2...256).contains(normalized.unicodeScalars.count) ? normalized : nil
+}
+
+func projectFileSearchQueryTrimmingWhiteSpace(_ query: String) -> String {
+    let scalars = query.unicodeScalars
+    guard let first = scalars.firstIndex(where: { !isProjectSearchWhiteSpace($0) }),
+          let last = scalars.lastIndex(where: { !isProjectSearchWhiteSpace($0) }) else { return "" }
+    return String(scalars[first...last])
+}
+
+private func isProjectSearchWhiteSpace(_ scalar: Unicode.Scalar) -> Bool {
+    switch scalar.value {
+    case 0x0009...0x000D, 0x0020, 0x0085, 0x00A0, 0x1680, 0x2000...0x200A,
+         0x2028, 0x2029, 0x202F, 0x205F, 0x3000:
+        true
+    default:
+        false
+    }
+}
+
 private struct PairingPayload: Codable { let version: Int; let server: String; let pairingId: String; let secret: String }
 struct RemoteProject: Codable, Identifiable {
     let id: String
@@ -36,6 +58,22 @@ struct RemoteRequestError: Equatable {
         self.message = message
         self.code = code
         self.retryable = retryable
+    }
+}
+
+struct FileSearchHistoryStore {
+    let defaults: UserDefaults
+
+    func load(projectId: String) -> [String]? {
+        defaults.stringArray(forKey: key(projectId))
+    }
+
+    func save(_ history: [String], projectId: String) {
+        defaults.set(Array(history.prefix(10)), forKey: key(projectId))
+    }
+
+    private func key(_ projectId: String) -> String {
+        "fileSearchHistory.\(projectId)"
     }
 }
 private struct DecodedImage: @unchecked Sendable {
@@ -70,6 +108,7 @@ final class MobileConnection: ObservableObject {
         case text(String)
         case image(String)
         case imageList(String)
+        case search(String, String, String)
         case changes(String, Int)
         case diff(String, String, GitChangeArea, Int)
         case sessionList(String)
@@ -86,6 +125,7 @@ final class MobileConnection: ObservableObject {
             case .directory: "project.listFiles.response"
             case .text, .image: "project.readFile.response"
             case .imageList: "project.listImages.response"
+            case .search: "project.searchFiles.response"
             case .changes: "project.listChanges.response"
             case .diff: "project.readDiff.response"
             case .sessionList: "session.list.response"
@@ -115,6 +155,10 @@ final class MobileConnection: ObservableObject {
     @Published var directoryErrors: [String: String] = [:]
     @Published var fileErrors: [String: String] = [:]
     @Published var imageListErrors: [String: String] = [:]
+    @Published var fileSearches: [String: ProjectSearchFilesResponse] = [:]
+    @Published var loadingSearchProjects: Set<String> = []
+    @Published var fileSearchErrors: [String: RemoteRequestError] = [:]
+    @Published private(set) var fileSearchHistories: [String: [String]] = [:]
     @Published var projectChanges: [String: ProjectChangesResponse] = [:]
     @Published var loadingChanges: Set<String> = []
     @Published var changesErrors: [String: RemoteRequestError] = [:]
@@ -141,6 +185,7 @@ final class MobileConnection: ObservableObject {
     @Published var error: String?
     private let deviceId: String
     private let scenarioRuntime: MobileScenarioRuntime?
+    private let fileSearchHistoryStore: FileSearchHistoryStore?
     private let requestTimeout: Duration
     private var macDeviceId: String?
     private var socket: URLSessionWebSocketTask?
@@ -148,6 +193,7 @@ final class MobileConnection: ObservableObject {
     private var scenarioDeliveryRevision = 0
     private var pendingRequests: [String: PendingRequest] = [:]
     private var pendingTimeouts: [String: Task<Void, Never>] = [:]
+    private var activeFileSearchIds: [String: String] = [:]
     private let changesDiffLifecycle = ChangesDiffLifecycle()
     private var activeImageKeys: Set<String> = []
     private var sessionOwnership: MobileSessionOwnership
@@ -179,9 +225,11 @@ final class MobileConnection: ObservableObject {
     init(
         scenarioRuntime: MobileScenarioRuntime? = MobileScenarioRuntime.fromLaunchArguments(),
         requestTimeout: Duration = .seconds(15),
-        recoveryCacheOverride: MobileRecoveryCache? = nil
+        recoveryCacheOverride: MobileRecoveryCache? = nil,
+        fileSearchHistoryDefaults: UserDefaults = .standard
     ) {
         self.scenarioRuntime = scenarioRuntime
+        self.fileSearchHistoryStore = scenarioRuntime == nil ? FileSearchHistoryStore(defaults: fileSearchHistoryDefaults) : nil
         self.requestTimeout = requestTimeout
         let recoveryCache = recoveryCacheOverride ?? (scenarioRuntime == nil
             ? UserDefaults.standard.data(forKey: "mobileRecoveryCache")
@@ -454,6 +502,72 @@ final class MobileConnection: ObservableObject {
     }
 
     @discardableResult
+    func searchFiles(projectId: String, query: String, limit: Int = 50) -> String? {
+        guard let normalized = normalizedProjectFileSearchQuery(query) else { return nil }
+        cancelFileSearch(projectId: projectId)
+        guard online, let macDeviceId else {
+            fileSearchErrors[projectId] = .init(message: "Mac is offline", code: "MAC_OFFLINE")
+            return nil
+        }
+        let searchId = UUID().uuidString
+        activeFileSearchIds[projectId] = searchId
+        fileSearchErrors.removeValue(forKey: projectId)
+        fileSearches.removeValue(forKey: projectId)
+        loadingSearchProjects.insert(projectId)
+        send(type: "project.searchFiles", target: macDeviceId, projectId: projectId,
+             payload: ["searchId": searchId, "query": normalized, "limit": min(max(limit, 1), 100)],
+             pending: .search(projectId, searchId, normalized))
+        return searchId
+    }
+
+    func cancelFileSearch(projectId: String) {
+        guard let searchId = activeFileSearchIds.removeValue(forKey: projectId) else { return }
+        let requestIds = pendingRequests.compactMap { id, pending -> String? in
+            guard case let .search(expectedProjectId, expectedSearchId, _) = pending,
+                  expectedProjectId == projectId, expectedSearchId == searchId else { return nil }
+            return id
+        }
+        for id in requestIds { finishPending(id, error: nil) }
+        sendFileSearchCancellation(projectId: projectId, searchId: searchId)
+    }
+
+    func clearFileSearch(projectId: String) {
+        cancelFileSearch(projectId: projectId)
+        fileSearches.removeValue(forKey: projectId)
+        fileSearchErrors.removeValue(forKey: projectId)
+    }
+
+    func fileSearchHistory(projectId: String) -> [String] {
+        if let cached = fileSearchHistories[projectId] { return cached }
+        guard let values = fileSearchHistoryStore?.load(projectId: projectId) else {
+            fileSearchHistories[projectId] = []
+            return []
+        }
+        let bounded = Array(values.prefix(10))
+        fileSearchHistories[projectId] = bounded
+        return bounded
+    }
+
+    func recordFileSearch(projectId: String, query: String) {
+        guard let value = normalizedProjectFileSearchQuery(query) else { return }
+        var history = fileSearchHistory(projectId: projectId).filter { $0.caseInsensitiveCompare(value) != .orderedSame }
+        history.insert(value, at: 0)
+        history = Array(history.prefix(10))
+        updateFileSearchHistory(projectId: projectId, history: history)
+    }
+
+    func removeFileSearchHistory(projectId: String, query: String) {
+        updateFileSearchHistory(
+            projectId: projectId,
+            history: fileSearchHistory(projectId: projectId).filter { $0 != query }
+        )
+    }
+
+    func clearFileSearchHistory(projectId: String) {
+        updateFileSearchHistory(projectId: projectId, history: [])
+    }
+
+    @discardableResult
     func requestChanges(projectId: String) -> Int {
         let generation = changesDiffLifecycle.beginChangesRequest(projectId: projectId)
         let prefix = changesDiffLifecycle.projectDiffPrefix(projectId: projectId)
@@ -496,6 +610,9 @@ final class MobileConnection: ObservableObject {
     func imageListError(projectId: String, path: String) -> String? { imageListErrors[fileKey(projectId: projectId, path: path)] }
     func isLoadingFile(projectId: String, path: String) -> Bool { loadingFiles.contains(fileKey(projectId: projectId, path: path)) }
     func isLoadingImageList(projectId: String, path: String) -> Bool { loadingImageLists.contains(fileKey(projectId: projectId, path: path)) }
+    func fileSearch(projectId: String) -> ProjectSearchFilesResponse? { fileSearches[projectId] }
+    func fileSearchError(projectId: String) -> RemoteRequestError? { fileSearchErrors[projectId] }
+    func isSearchingFiles(projectId: String) -> Bool { loadingSearchProjects.contains(projectId) }
     func changes(projectId: String) -> ProjectChangesResponse? { projectChanges[projectId] }
     func changesError(projectId: String) -> RemoteRequestError? { changesErrors[projectId] }
     func changesCompletion(projectId: String) -> ChangesRequestCompletion? { changesCompletions[projectId] }
@@ -562,6 +679,7 @@ final class MobileConnection: ObservableObject {
             return
         }
         let replyTo = message["replyTo"] as? String
+        if let replyTo, pendingRequests[replyTo] == nil { return }
         if let replyTo, let pending = pendingRequests[replyTo],
            !matchesResponse(pending, type: type, source: message["sourceDeviceId"] as? String,
                             projectId: message["projectId"] as? String, sessionId: message["sessionId"] as? String) {
@@ -581,6 +699,9 @@ final class MobileConnection: ObservableObject {
                     finishPending(replyTo, error: nil)
                 case let .diff(projectId, path, area, generation) where changesDiffLifecycle.isCurrent(projectId: projectId, generation: generation):
                     diffErrors[diffKey(projectId: projectId, path: path, area: area)] = .init(message: errorMessage, code: errorCode)
+                    finishPending(replyTo, error: nil)
+                case let .search(projectId, searchId, _) where activeFileSearchIds[projectId] == searchId:
+                    fileSearchErrors[projectId] = .init(message: errorMessage, code: errorCode)
                     finishPending(replyTo, error: nil)
                 default:
                     finishPending(replyTo, error: errorMessage)
@@ -711,6 +832,14 @@ final class MobileConnection: ObservableObject {
             if let replyTo, case let .some(.imageList(expectedKey)) = pendingRequests[replyTo], expectedKey == key {
                 imageLists[key] = response; handled = true
             }
+        } else if type == "project.searchFiles.response", let projectId = message["projectId"] as? String,
+                  let response = try? JSONDecoder().decode(ProjectSearchFilesResponse.self, from: payloadData) {
+            if let replyTo, case let .some(.search(expectedProjectId, expectedSearchId, expectedQuery)) = pendingRequests[replyTo],
+               expectedProjectId == projectId, expectedSearchId == response.searchId,
+               expectedQuery == response.query, activeFileSearchIds[projectId] == response.searchId {
+                fileSearches[projectId] = response
+                handled = true
+            }
         } else if type == "project.listChanges.response", let projectId = message["projectId"] as? String,
                   let response = try? JSONDecoder().decode(ProjectChangesResponse.self, from: payloadData) {
             if let replyTo, case let .some(.changes(expectedProjectId, generation)) = pendingRequests[replyTo],
@@ -780,6 +909,17 @@ final class MobileConnection: ObservableObject {
         case let .imageList(key):
             loadingImageLists.remove(key)
             if let message { imageListErrors[key] = message }
+        case let .search(projectId, searchId, _):
+            if let activeSearchId = activeFileSearchIds[projectId], activeSearchId != searchId { return }
+            if activeFileSearchIds[projectId] == searchId { activeFileSearchIds.removeValue(forKey: projectId) }
+            loadingSearchProjects.remove(projectId)
+            if let message {
+                fileSearchErrors[projectId] = .init(
+                    message: message,
+                    code: message == "Request timed out" ? "TIMEOUT" : "PROJECT_SEARCH_FAILED"
+                )
+                sendFileSearchCancellation(projectId: projectId, searchId: searchId)
+            }
         case let .changes(projectId, generation):
             guard changesDiffLifecycle.isCurrent(projectId: projectId, generation: generation) else { return }
             loadingChanges.remove(projectId)
@@ -864,6 +1004,17 @@ final class MobileConnection: ObservableObject {
         persistRecoveryState()
         send(type: "interaction.respond", target: macDeviceId, projectId: session.projectId, sessionId: session.id,
              payload: payload, pending: .interaction(session.projectId, session.id, interactionId))
+    }
+
+    private func sendFileSearchCancellation(projectId: String, searchId: String) {
+        guard online, let macDeviceId else { return }
+        send(type: "project.cancelSearch", target: macDeviceId, projectId: projectId,
+             payload: ["searchId": searchId])
+    }
+
+    private func updateFileSearchHistory(projectId: String, history: [String]) {
+        fileSearchHistories[projectId] = history
+        fileSearchHistoryStore?.save(history, projectId: projectId)
     }
 
     private func subscribe(sessionId: String, projectId: String) {
@@ -1260,6 +1411,8 @@ final class MobileConnection: ObservableObject {
             return projectId == nil && sessionId == nil
         case .directory, .text, .image, .imageList:
             return projectId != nil
+        case let .search(expectedProjectId, _, _):
+            return projectId == expectedProjectId && sessionId == nil
         case let .changes(expectedProjectId, _), let .diff(expectedProjectId, _, _, _):
             return projectId == expectedProjectId && sessionId == nil
         case let .sessionList(expectedProjectId), let .sessionCreate(expectedProjectId):

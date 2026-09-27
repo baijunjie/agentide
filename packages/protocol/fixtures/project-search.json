@@ -1,0 +1,18 @@
+{
+  "projectSearchFilesRequest": { "searchId": "search-1", "query": "readme", "limit": 50 },
+  "projectCancelSearchRequest": { "searchId": "search-1" },
+  "projectSearchFilesResponse": {
+    "searchId": "search-1",
+    "query": "readme",
+    "results": [{
+      "name": "README.md",
+      "relativePath": "docs/README.md",
+      "type": "file",
+      "size": 128,
+      "extension": "md",
+      "isText": true,
+      "isImage": false
+    }],
+    "hasMore": false
+  }
+}

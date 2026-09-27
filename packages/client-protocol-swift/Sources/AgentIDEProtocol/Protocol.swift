@@ -77,6 +77,96 @@ public struct FileEntry: Codable, Equatable, Sendable {
     public let `extension`: String?
     public let isText: Bool?
     public let isImage: Bool?
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case name, relativePath, type, size, `extension`, isText, isImage
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        relativePath = try container.decode(String.self, forKey: .relativePath)
+        type = try container.decode(EntryType.self, forKey: .type)
+        size = try decodeOptionalNonNegativeInt(container, forKey: .size)
+        `extension` = try decodeOptionalNonNull(container, forKey: .extension)
+        isText = try decodeOptionalNonNull(container, forKey: .isText)
+        isImage = try decodeOptionalNonNull(container, forKey: .isImage)
+    }
+}
+
+public struct ProjectSearchFilesRequest: Codable, Equatable, Sendable {
+    public let searchId: String
+    public let query: String
+    public let limit: Int
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case searchId, query, limit }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        searchId = try container.decode(String.self, forKey: .searchId)
+        query = try container.decode(String.self, forKey: .query)
+        limit = try container.decode(Int.self, forKey: .limit)
+        guard validSearchId(searchId), validSearchQuery(query), (1...100).contains(limit) else {
+            throw ProtocolDecodingError.invalidSearchRequest
+        }
+    }
+}
+
+public struct ProjectCancelSearchRequest: Codable, Equatable, Sendable {
+    public let searchId: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case searchId }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        searchId = try container.decode(String.self, forKey: .searchId)
+        guard validSearchId(searchId) else { throw ProtocolDecodingError.invalidSearchRequest }
+    }
+}
+
+public struct ProjectSearchFilesResponse: Codable, Equatable, Sendable {
+    public let searchId: String
+    public let query: String
+    public let results: [FileEntry]
+    public let hasMore: Bool
+
+    private enum CodingKeys: String, CodingKey, CaseIterable { case searchId, query, results, hasMore }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        searchId = try container.decode(String.self, forKey: .searchId)
+        query = try container.decode(String.self, forKey: .query)
+        results = try container.decode([FileEntry].self, forKey: .results)
+        hasMore = try container.decode(Bool.self, forKey: .hasMore)
+        guard validSearchId(searchId), validSearchQuery(query), results.count <= 100 else {
+            throw ProtocolDecodingError.invalidSearchRequest
+        }
+    }
+}
+
+private func validSearchQuery(_ query: String) -> Bool {
+    let scalars = query.unicodeScalars
+    return (2...256).contains(scalars.count)
+        && scalars.first.map({ !isUnicodeWhiteSpace($0) }) == true
+        && scalars.last.map({ !isUnicodeWhiteSpace($0) }) == true
+}
+
+private func isUnicodeWhiteSpace(_ scalar: Unicode.Scalar) -> Bool {
+    switch scalar.value {
+    case 0x0009...0x000D, 0x0020, 0x0085, 0x00A0, 0x1680, 0x2000...0x200A,
+         0x2028, 0x2029, 0x202F, 0x205F, 0x3000:
+        true
+    default:
+        false
+    }
+}
+
+private func validSearchId(_ searchId: String) -> Bool {
+    (1...128).contains(searchId.unicodeScalars.count)
 }
 
 public enum GitChangeKind: String, Codable, Sendable {
@@ -717,6 +807,7 @@ public struct SessionSnapshot: Codable, Equatable, Sendable {
 }
 
 private enum ProtocolDecodingError: Error {
+    case invalidSearchRequest
     case binaryDiff
     case emptyActions
     case emptyString(String)
@@ -768,6 +859,17 @@ private func decodeOptionalString<Key: CodingKey>(
         throw ProtocolDecodingError.explicitNull(key.stringValue)
     }
     return try container.decode(String.self, forKey: key)
+}
+
+private func decodeOptionalNonNull<Value: Decodable, Key: CodingKey>(
+    _ container: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) throws -> Value? {
+    guard container.contains(key) else { return nil }
+    guard try !container.decodeNil(forKey: key) else {
+        throw ProtocolDecodingError.explicitNull(key.stringValue)
+    }
+    return try container.decode(Value.self, forKey: key)
 }
 
 private func decodeOptionalNonNegativeInt<Key: CodingKey>(

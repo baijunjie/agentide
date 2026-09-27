@@ -132,4 +132,73 @@ final class ScenarioSmokeUITests: XCTestCase {
         fileChanged.tap()
         XCTAssertTrue(app.staticTexts["diff-hunk"].waitForExistence(timeout: 5))
     }
+
+    func testComprehensiveScenarioSearchesFileAndSendsReferenceToSession() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+        XCTAssertTrue(app.buttons["session-browse-files"].waitForExistence(timeout: 5))
+        app.buttons["session-browse-files"].tap()
+
+        let search = app.textFields["file-search-field"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("Context")
+        let result = app.staticTexts["Context Guide.md"]
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
+
+        XCTAssertTrue(app.buttons["file-actions"].waitForExistence(timeout: 5))
+        app.buttons["file-actions"].tap()
+        XCTAssertTrue(app.buttons["Send to Agent"].waitForExistence(timeout: 5))
+        app.buttons["Send to Agent"].tap()
+        let composer = app.textFields["session-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertEqual(composer.value as? String, "@Sources/Context Guide.md")
+    }
+
+    func testComprehensiveScenarioSearchesAndLocatesDirectory() {
+        let app = launchFileBrowser(scenario: "comprehensive")
+        let search = app.textFields["file-search-field"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("Sources")
+        let result = app.staticTexts.matching(identifier: "Sources").firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
+        XCTAssertTrue(app.staticTexts["App.swift"].waitForExistence(timeout: 5))
+    }
+
+    func testSearchDirectoryDisappearingShowsRecoverableError() {
+        let app = launchFileBrowser(scenario: "search-missing-directory")
+        let search = app.textFields["file-search-field"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("Deleted")
+        let result = app.staticTexts.matching(identifier: "Deleted").firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        result.tap()
+        XCTAssertTrue(app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "no longer available")
+        ).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Dismiss"].exists)
+    }
+
+    private func launchFileBrowser(scenario: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", scenario]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+        XCTAssertTrue(app.buttons["session-browse-files"].waitForExistence(timeout: 5))
+        app.buttons["session-browse-files"].tap()
+        return app
+    }
 }

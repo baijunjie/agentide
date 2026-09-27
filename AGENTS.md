@@ -7,6 +7,7 @@
 
 ## 开发收尾
 
+- 开发收尾时调用 `change-check` skill，并派 `change-checker` 子代理做改动检查。
 - 开发收尾需要写或更新产品文档与项目地图时，派 `doc-writer` 子代理处理。
 - 开发收尾时，派 `memory-writer` 子代理判断并沉淀开发记忆。
 

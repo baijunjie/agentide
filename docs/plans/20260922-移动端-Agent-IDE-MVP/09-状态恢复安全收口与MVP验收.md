@@ -3,6 +3,13 @@
 > 目标: 在完整功能闭环上收口断线恢复、会话恢复与 MVP 安全边界，并通过全部端到端演示验收。
 > 完成判据: iOS 断线或被系统结束后能恢复项目、会话、最近事件、待处理交互与实时流；TLS/WSS、设备身份、可撤销 token、单次配对密钥和项目路径沙箱均经验证；大纲中 7 组 MVP Demo 全部通过。
 
+## 落地状态
+
+- 会话快照、iOS 有界恢复缓存、项目路径沙箱和 Relay 职责边界已落地；受认证的 Agent Host companion process 也已替换 Mac App 的固定开发端点。
+- Mac App 现在随包携带独立 Node 运行时、Agent Host 生产依赖和按目标架构构建的原生 helper，以随机本地端口和每次启动凭据完成就绪握手。App 监督异常退出并持续退避重启；App 或父进程退出时会关闭 HTTP 连接、并发停止 Agent adapter，并为拒绝退出的 Codex 进程组设置强制清理期限。
+- 已通过全仓 TypeScript 检查、构建与测试、Swift 协议测试、macOS 与 iOS Simulator 构建；另以带空格的输出目录验证 ad-hoc 签名、最小 JIT 权限和签后 Node 探针。尚未在已签名发布 App 内手工执行真实 Claude/Codex 会话，也未完成真机、TLS/WSS 与 7 组 MVP Demo 验收。
+- 本里程碑继续保留：传输与设备凭据部署验证、真机恢复路径、TCC 保护目录和全部 Demo 仍需在具备真实部署及已配对设备的环境中完成。
+
 ## 技术设计
 
 - [x] Mac 上的 Agent Host 继续作为 projects、sessions 和 events 的本地权威源，Mac 持久化设备设置；设备绑定与撤销仍以 Relay 控制面为权威，避免产生两套安全状态。
@@ -15,7 +22,7 @@
 
 ## 实现方案
 
-- [ ] 将固定端口的开发期 Agent Host 替换为随 macOS App 分发、认证并受监督的 companion process；App 退出时停止 companion，发布构建不得回退到外部 Node 或固定 `127.0.0.1:8788`。
+- [x] 将固定端口的开发期 Agent Host 替换为随 macOS App 分发、认证并受监督的 companion process；App 退出时停止 companion，发布构建不得回退到外部 Node 或固定 `127.0.0.1:8788`。
 - [ ] 使用已配对真机完整检查 Session → Files → Text File、Session → Files → Image 与逐级返回，覆盖横竖屏、手势阈值和安全区域。
 - [ ] 覆盖 WebSocket 断开、iOS 进入后台、iOS 被系统结束与 Mac 上 Agent 仍在运行时的恢复流程。
 - [ ] 验证 snapshot 中的待审批/待回答交互不丢失，恢复后的回复仍可到达正确 Agent session。

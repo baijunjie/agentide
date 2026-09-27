@@ -2,7 +2,7 @@
 
 ## macOS 客户端
 
-`apps/macos/` 是 SwiftUI macOS 应用入口，依赖本地 `AgentIDEProtocol` Swift Package。应用登记并保存稳定的本机设备身份，生成短期配对二维码，管理已配对的 iPhone 和 Agent Host 中的本机项目。它持有 Mac 唯一的 Relay 连接，通过该连接响应项目与会话请求，并按目标设备和会话游标重传未确认的 Agent 事件。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，项目行为见 [项目登记与文件浏览](../docs/product/project-files.md)，会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
+`apps/macos/` 是 SwiftUI macOS 应用入口，依赖本地 `AgentIDEProtocol` Swift Package。应用登记并保存稳定的本机设备身份，生成短期配对二维码，管理已配对的 iPhone 和 Agent Host 中的本机项目。它持有 Mac 唯一的 Relay 连接，通过该连接响应项目与会话请求，并按目标设备和会话游标重传未确认的 Agent 事件；随包的 Agent Host companion 由应用启动、鉴权、监督和清理。设备连接规则见 [设备配对与 Relay 连接](../docs/product/device-pairing.md)，项目行为见 [项目登记与文件浏览](../docs/product/project-files.md)，本地执行进程与会话行为见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外入口：
 
@@ -40,7 +40,7 @@
 
 ## Agent Host
 
-`apps/agent-host/` 是 Mac 本地 Agent 执行进程的组合边界。它持久化 Mac 明确登记的项目、统一会话和规范化事件，通过本地 HTTP IPC 提供项目管理、会话管理和受根目录约束的文件访问；本地组合默认装配 Claude 与 Codex Adapter，`AgentHost` 也可通过依赖注入组合文件访问、Relay 连接和具体 Agent 集成。项目与文件访问规则见 [项目登记与文件浏览](../docs/product/project-files.md)，会话执行与恢复规则见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
+`apps/agent-host/` 是随 macOS 应用分发的本地 Agent 执行进程边界。它持久化 Mac 明确登记的项目、统一会话和规范化事件，通过 loopback HTTP IPC 提供项目管理、会话管理和受根目录约束的文件访问；本地组合默认装配 Claude 与 Codex Adapter，`AgentHost` 也可通过依赖注入组合文件访问、Relay 连接和具体 Agent 集成。macOS 应用使用每次启动新生成的凭据鉴权全部 IPC，并监督进程生命周期。项目与文件访问规则见 [项目登记与文件浏览](../docs/product/project-files.md)，进程生命周期、会话执行与恢复规则见 [Agent 会话执行与事件投递](../docs/product/agent-sessions.md)。
 
 对外接口：
 
@@ -49,7 +49,7 @@
 - `ProjectStore`：持久化项目登记，提供 `list()`、`get()`、`add()`、`rename()` 和 `remove()`；随包可用的 Claude 始终启用，Codex 则按 `PATH` 中的可执行文件检测。
 - `SessionStore`：持久化统一会话元数据和按会话分隔的 JSONL 事件日志，并按稳定序列号查询事件。
 - `SessionManager`、`CreateManagedSession`：通过统一边界创建或恢复 Claude/Codex 会话，串行化会话操作，并把 Adapter 事件写入 `SessionStore`。
-- `createAgentHostServer()`：创建承载项目、文件和会话 IPC 的未监听端口 Node HTTP server。
+- `createAgentHostServer()`：创建承载项目、文件和会话 IPC 的未监听端口 Node HTTP server；配置启动凭据后，所有端点都要求完全匹配的 Bearer token。
 - `RelayClient`：建立/断开 Relay 连接并发送 Envelope。
 - `RelayClientOptions`：配置 Relay URL、设备凭据、重连基准延迟和消息回调。
 - `ReconnectingRelayClient`：带最多 100 条待发送队列和最长 30 秒指数退避的 WebSocket 客户端。
@@ -67,7 +67,12 @@
 - `POST /projects/:projectId/files/list`：列出项目根目录或其子目录。
 - `POST /projects/:projectId/files/read-text`、`POST /projects/:projectId/files/read-binary`：读取项目内文本，或以 Base64 返回二进制文件。
 - `POST /projects/:projectId/files/list-images`：列出指定文件同目录的图片。
-- `pnpm --filter @agentide/agent-host start`：默认监听 `127.0.0.1:8788`，可用 `AGENT_HOST_PORT` 覆盖端口；项目登记与会话数据默认写入 `~/Library/Application Support/AgentIDE/`，可用 `AGENTIDE_DATA_DIR` 覆盖数据目录。
+- `pnpm --filter @agentide/agent-host start`：直接启动 companion 入口；必须提供至少 32 字符的 `AGENT_HOST_TOKEN` 和监督进程的 `AGENT_HOST_PARENT_PID`，默认在 `127.0.0.1` 上使用系统分配的随机端口，也可用 `AGENT_HOST_PORT` 指定端口。项目登记与会话数据默认写入 `~/Library/Application Support/AgentIDE/`，可用 `AGENTIDE_DATA_DIR` 覆盖数据目录。
+
+macOS 随包构建：
+
+- `scripts/package-macos-companion.sh` 把独立 Node.js 运行时、Agent Host 生产依赖、Claude 可执行文件和按目标架构构建的 native helper 组装到应用资源中的 `AgentHost/`。构建会检查其中每个 Mach-O 可执行文件覆盖全部目标架构，缺失任一架构即失败。
+- 启用代码签名时，打包脚本只为 Node.js 与 Claude 可执行文件附加运行 JavaScript 所需的最小 runtime entitlement，其他 Mach-O 使用普通 hardened runtime 签名；签名完成后还会直接执行随包 Node.js 探针，不能运行则构建失败。
 
 文件访问实现边界：
 

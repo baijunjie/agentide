@@ -54,6 +54,7 @@ export class SpawnedCodexAppServer implements CodexAppServerConnection {
 
   private async startOnce(): Promise<void> {
     const child = spawn(this.executable, ["app-server"], {
+      detached: process.platform !== "win32",
       env: this.environment,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -89,8 +90,8 @@ export class SpawnedCodexAppServer implements CodexAppServerConnection {
     this.process = undefined;
     this.lines?.close();
     this.lines = undefined;
-    child.kill("SIGTERM");
     this.failAll(new Error("Codex app-server stopped"));
+    await this.terminate(child);
   }
 
   async request(method: string, params: unknown): Promise<unknown> {
@@ -173,7 +174,37 @@ export class SpawnedCodexAppServer implements CodexAppServerConnection {
     this.lines?.close();
     this.lines = undefined;
     this.failAll(new Error("Codex app-server initialization failed"));
-    child.kill("SIGTERM");
+    void this.terminate(child);
+  }
+
+  private async terminate(child: ChildProcessWithoutNullStreams): Promise<void> {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(forceKill);
+        child.off("exit", finish);
+        resolve();
+      };
+      const forceKill = setTimeout(() => {
+        this.signalProcessTree(child, "SIGKILL");
+      }, 1_000);
+      forceKill.unref();
+      child.once("exit", finish);
+      this.signalProcessTree(child, "SIGTERM");
+    });
+  }
+
+  private signalProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch { /* The child may not have established its process group yet. */ }
+    }
+    child.kill(signal);
   }
 }
 

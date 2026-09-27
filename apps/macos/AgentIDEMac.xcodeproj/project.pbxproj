@@ -10,6 +10,7 @@
 		A10000000000000000000003 /* AgentIDEProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* AgentIDEProtocol */; };
 		A10000000000000000000015 /* MacViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* MacViews.swift */; };
 		A10000000000000000000017 /* MacSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* MacSupport.swift */; };
+		A10000000000000000000019 /* AgentHostSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001A /* AgentHostSupervisor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -17,6 +18,7 @@
 		A10000000000000000000005 /* AgentIDEMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AgentIDEMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000016 /* MacViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacViews.swift; sourceTree = "<group>"; };
 		A10000000000000000000018 /* MacSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSupport.swift; sourceTree = "<group>"; };
+		A1000000000000000000001A /* AgentHostSupervisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHostSupervisor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -25,12 +27,12 @@
 
 /* Begin PBXGroup section */
 		A10000000000000000000007 = {isa = PBXGroup; children = (A10000000000000000000008 /* AgentIDEMac */, A10000000000000000000009 /* Products */,); sourceTree = "<group>"; };
-		A10000000000000000000008 /* AgentIDEMac */ = {isa = PBXGroup; children = (A10000000000000000000002 /* App.swift */, A10000000000000000000016 /* MacViews.swift */, A10000000000000000000018 /* MacSupport.swift */,); path = AgentIDEMac; sourceTree = "<group>"; };
+		A10000000000000000000008 /* AgentIDEMac */ = {isa = PBXGroup; children = (A10000000000000000000002 /* App.swift */, A1000000000000000000001A /* AgentHostSupervisor.swift */, A10000000000000000000016 /* MacViews.swift */, A10000000000000000000018 /* MacSupport.swift */,); path = AgentIDEMac; sourceTree = "<group>"; };
 		A10000000000000000000009 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000005 /* AgentIDEMac.app */,); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A1000000000000000000000A /* AgentIDEMac */ = {isa = PBXNativeTarget; buildConfigurationList = A1000000000000000000000B /* Build configuration list for PBXNativeTarget "AgentIDEMac" */; buildPhases = (A1000000000000000000000C /* Sources */, A10000000000000000000006 /* Frameworks */, A1000000000000000000000D /* Resources */,); buildRules = (); dependencies = (); name = AgentIDEMac; packageProductDependencies = (A10000000000000000000004 /* AgentIDEProtocol */,); productName = AgentIDEMac; productReference = A10000000000000000000005 /* AgentIDEMac.app */; productType = "com.apple.product-type.application"; };
+		A1000000000000000000000A /* AgentIDEMac */ = {isa = PBXNativeTarget; buildConfigurationList = A1000000000000000000000B /* Build configuration list for PBXNativeTarget "AgentIDEMac" */; buildPhases = (A1000000000000000000000C /* Sources */, A10000000000000000000006 /* Frameworks */, A1000000000000000000000D /* Resources */, A1000000000000000000001B /* Package Agent Host Companion */,); buildRules = (); dependencies = (); name = AgentIDEMac; packageProductDependencies = (A10000000000000000000004 /* AgentIDEProtocol */,); productName = AgentIDEMac; productReference = A10000000000000000000005 /* AgentIDEMac.app */; productType = "com.apple.product-type.application"; };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -41,13 +43,28 @@
 		A1000000000000000000000D /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A1000000000000000000001B /* Package Agent Host Companion */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			name = "Package Agent Host Companion";
+			outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AgentHost/node",);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/../../scripts/package-macos-companion.sh\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/AgentHost\" \"$ARCHS\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
-		A1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* App.swift in Sources */, A10000000000000000000015 /* MacViews.swift in Sources */, A10000000000000000000017 /* MacSupport.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		A1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* App.swift in Sources */, A10000000000000000000019 /* AgentHostSupervisor.swift in Sources */, A10000000000000000000015 /* MacViews.swift in Sources */, A10000000000000000000017 /* MacSupport.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		A10000000000000000000011 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = AgentIDE; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = dev.agentide.mac; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; }; name = Debug; };
-		A10000000000000000000012 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = YES; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = AgentIDE; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = dev.agentide.mac; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; }; name = Release; };
+		A10000000000000000000011 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = YES; ENABLE_USER_SCRIPT_SANDBOXING = NO; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = AgentIDE; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = dev.agentide.mac; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; }; name = Debug; };
+		A10000000000000000000012 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; ENABLE_HARDENED_RUNTIME = YES; ENABLE_USER_SCRIPT_SANDBOXING = NO; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = AgentIDE; MACOSX_DEPLOYMENT_TARGET = 14.0; MARKETING_VERSION = 0.1.0; PRODUCT_BUNDLE_IDENTIFIER = dev.agentide.mac; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 6.0; }; name = Release; };
 		A10000000000000000000013 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_OPTIMIZATION_LEVEL = 0; ONLY_ACTIVE_ARCH = YES; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
 		A10000000000000000000014 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {COPY_PHASE_STRIP = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; SWIFT_OPTIMIZATION_LEVEL = "-O"; VALIDATE_PRODUCT = YES; }; name = Release; };
 /* End XCBuildConfiguration section */

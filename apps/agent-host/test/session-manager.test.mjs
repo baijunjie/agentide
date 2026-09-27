@@ -64,6 +64,22 @@ class FakeAdapter {
   events(sessionId) { return this.queues.get(sessionId); }
 }
 
+test("session manager starts every adapter shutdown without waiting for another adapter", async () => {
+  let releaseFirst;
+  let secondStarted = false;
+  const first = new FakeAdapter("claude");
+  first.close = () => new Promise((resolve) => { releaseFirst = resolve; });
+  const second = new FakeAdapter("codex");
+  second.close = async () => { secondStarted = true; };
+  const manager = new SessionManager({}, {}, new Map([["claude", first], ["codex", second]]));
+
+  const closing = manager.close();
+  await Promise.resolve();
+  assert.equal(secondStarted, true);
+  releaseFirst();
+  await closing;
+});
+
 test("session manager persists normalized events and resumes native sessions", async (context) => {
   const base = await mkdtemp(join(tmpdir(), "agentide-sessions-"));
   context.after(() => rm(base, { recursive: true, force: true }));

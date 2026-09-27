@@ -4,6 +4,14 @@ Agent 会话由 Mac 上的 Agent Host 执行和持久化。iPhone 通过已配�
 
 统一事件字段和 Adapter 接口见 [三端通信与 Agent 契约](protocol.md)；设备鉴权、在线状态与 Relay 的短时离线缓冲见 [设备配对与 Relay 连接](device-pairing.md)。
 
+## Mac 本地执行进程
+
+macOS 应用随包携带 Agent Host 及其 Node.js 运行时、生产依赖和原生文件访问 helper。用户启动应用后无需另行启动本地服务；应用按需启动 Agent Host，等它通过启动握手报告实际监听端口后才发送项目或会话请求。
+
+Agent Host 只监听 loopback 地址，并在每次启动时使用系统分配的随机端口和新的随机 Bearer 凭据。macOS 应用持有该端口与凭据，所有本地 IPC 请求都必须通过鉴权；启动配置在 Adapter 初始化前从 Agent Host 的进程环境中移除，不会传给 Claude 或 Codex 子进程。
+
+Agent Host 异常退出后，macOS 应用以最长 30 秒的指数退避持续尝试重启；应用退出时会终止其监督的 Agent Host，而 Agent Host 也会监视父进程，避免 Mac 应用意外退出后成为孤儿进程。退出期间，Agent Host 在有限期限内关闭 HTTP 连接与 Agent Adapter；Codex 子进程组先收到终止信号，未退出时再强制结束，Claude 的活动 Query 则被主动关闭。会话元数据与已经写入的规范化事件仍以本地持久化数据为准。
+
 ## 会话与轮次
 
 - 创建会话时必须指定已登记项目及该项目已启用的 Agent。Agent Host 先建立 Agent 原生会话并持久化统一 `Session`，再发送可选的初始任务。

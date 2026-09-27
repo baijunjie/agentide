@@ -230,6 +230,22 @@ test("local IPC exposes project management and safe file operations", async (con
   assert.equal(escaped.status, 400);
 });
 
+test("local IPC requires its per-launch bearer token when configured", async (context) => {
+  const fixture = await createFixture(context);
+  const token = "a".repeat(32);
+  const server = createAgentHostServer(new ProjectStore(fixture.storePath, ""), undefined, { authenticationToken: token });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  const base = `http://127.0.0.1:${address.port}`;
+
+  assert.equal((await fetch(`${base}/health`)).status, 401);
+  assert.equal((await fetch(`${base}/health`, { headers: { authorization: "Bearer wrong" } })).status, 401);
+  const authorized = await fetch(`${base}/health`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(authorized.status, 200);
+  assert.deepEqual(await authorized.json(), { status: "ok" });
+});
+
 test("native reads enforce the byte limit when a file grows after opening", async (context) => {
   const fixture = await createFixture(context);
   const path = join(fixture.root, "growing.txt");

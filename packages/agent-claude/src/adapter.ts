@@ -33,6 +33,7 @@ interface ActiveTurn {
   abortController: AbortController;
   cancelled: boolean;
   completion: Promise<void>;
+  iterator?: AsyncIterator<SDKMessage>;
   started: Promise<void>;
   resolveStarted: () => void;
   rejectStarted: (error: unknown) => void;
@@ -181,9 +182,11 @@ export class ClaudeAdapter implements AgentAdapter {
         canUseTool: (toolName, toolInput, permissionOptions) =>
           this.requestPermission(state, toolName, toolInput, permissionOptions),
       });
+      const iterator = stream[Symbol.asyncIterator]();
+      turn.iterator = iterator;
       state.resumeOnNextTurn = true;
       turn.resolveStarted();
-      await this.consume(state, turn, stream);
+      await this.consume(state, turn, { [Symbol.asyncIterator]: () => iterator });
     } catch (error) {
       if (state.activeTurn === turn) {
         if (turn.cancelled || isAbortError(error)) this.finishTurn(state, turn, "cancelled");
@@ -249,6 +252,8 @@ export class ClaudeAdapter implements AgentAdapter {
       if (state.activeTurn !== undefined) {
         state.activeTurn.cancelled = true;
         state.activeTurn.abortController.abort();
+        const closing = state.activeTurn.iterator?.return?.();
+        if (closing !== undefined) turns.push(closing.then(() => undefined));
         turns.push(state.activeTurn.completion);
       }
       this.resolvePendingAsDenied(state, "Claude adapter closed");

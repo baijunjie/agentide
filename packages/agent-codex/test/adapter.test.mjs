@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -199,4 +199,26 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   await assert.rejects(connection.start(), /init rejected/);
   await connection.start();
   await connection.stop();
+});
+
+test("app-server force kills its process group when graceful termination is ignored", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "agentide-codex-stop-"));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const executable = join(directory, "fake-codex");
+  const pidFile = join(directory, "pid");
+  await writeFile(executable, `#!/bin/sh
+trap '' TERM
+echo $$ > "$PID_FILE"
+while IFS= read -r line; do
+  printf '%s\\n' '{"id":1,"result":{}}'
+done
+`);
+  await chmod(executable, 0o755);
+  const connection = new SpawnedCodexAppServer(executable, { ...process.env, PID_FILE: pidFile });
+  await connection.start();
+  const pid = Number(await readFile(pidFile, "utf8"));
+  const startedAt = Date.now();
+  await connection.stop();
+  assert.equal(Date.now() - startedAt >= 900, true);
+  assert.throws(() => process.kill(pid, 0), (error) => error.code === "ESRCH");
 });

@@ -3,17 +3,31 @@ import { LocalFileService } from "./file-service.js";
 import { ProjectStore } from "./project-store.js";
 import { SessionManager } from "./session-manager.js";
 
+export interface AgentHostServerOptions {
+  authenticationToken?: string;
+}
+
 export function createAgentHostServer(
   projects = new ProjectStore(),
   sessions = SessionManager.local(projects),
+  options: AgentHostServerOptions = {},
 ) {
   const files = new LocalFileService(projects);
   return createServer((request, response) => {
+    if (!isAuthorized(request, options.authenticationToken)) {
+      sendJSON(response, 401, { error: "Unauthorized" });
+      return;
+    }
     void route(request, response, projects, files, sessions).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "Unexpected error";
       sendJSON(response, statusFor(message), { error: message });
     });
   });
+}
+
+function isAuthorized(request: IncomingMessage, token: string | undefined): boolean {
+  if (token === undefined) return true;
+  return request.headers.authorization === `Bearer ${token}`;
 }
 
 async function route(

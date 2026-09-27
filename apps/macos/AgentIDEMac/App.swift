@@ -39,8 +39,7 @@ final class MacConnection: ObservableObject {
     private var acknowledgedEventSequences: [EventStreamKey: Int] = [:]
     private var sentEventSequences: [EventStreamKey: Int] = [:]
     private var sessionStreamGenerations: [EventStreamKey: Int] = [:]
-    // TODO: Replace the development endpoint with the packaged companion-process endpoint before release.
-    private let agentHost = URL(string: "http://127.0.0.1:8788")!
+    private let agentHost = AgentHostSupervisor()
 
     init() {
         if let id = UserDefaults.standard.string(forKey: "deviceId") { deviceId = id }
@@ -494,8 +493,10 @@ final class MacConnection: ObservableObject {
     }
 
     private func hostRequest<Response: Decodable, Body: Encodable>(_ path: String, method: String, body: Body?) async throws -> Response {
-        guard let url = URL(string: path, relativeTo: agentHost) else { throw URLError(.badURL) }
+        let connection = try await agentHost.connection()
+        guard let url = URL(string: path, relativeTo: connection.baseURL) else { throw URLError(.badURL) }
         var request = URLRequest(url: url); request.httpMethod = method
+        request.setValue("Bearer \(connection.authenticationToken)", forHTTPHeaderField: "Authorization")
         if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return try await perform(request)
     }

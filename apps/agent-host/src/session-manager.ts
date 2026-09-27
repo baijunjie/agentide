@@ -145,9 +145,10 @@ export class SessionManager {
   }
 
   async close(): Promise<void> {
-    for (const adapter of new Set(this.adapters.values())) {
-      if ("close" in adapter && typeof adapter.close === "function") await adapter.close();
-    }
+    const adapters = [...new Set(this.adapters.values())];
+    await Promise.allSettled(adapters.map((adapter) =>
+      "close" in adapter && typeof adapter.close === "function" ? adapter.close() : Promise.resolve(),
+    ));
     await Promise.allSettled(this.pumps.values());
   }
 

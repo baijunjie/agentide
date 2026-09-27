@@ -319,6 +319,7 @@ private extension PendingInteraction {
 final class MobileConnection: ObservableObject {
     struct Claim: Decodable { let token: String }
     private enum PendingRequest {
+        case projectList
         case directory(String)
         case text(String)
         case image(String)
@@ -333,6 +334,7 @@ final class MobileConnection: ObservableObject {
 
         var responseType: String {
             switch self {
+            case .projectList: "project.list.response"
             case .directory: "project.listFiles.response"
             case .text, .image: "project.readFile.response"
             case .imageList: "project.listImages.response"
@@ -381,8 +383,12 @@ final class MobileConnection: ObservableObject {
     @Published private var imageRevision = 0
     @Published var error: String?
     private let deviceId: String
+    private let scenarioRuntime: MobileScenarioRuntime?
+    private let requestTimeout: Duration
     private var macDeviceId: String?
     private var socket: URLSessionWebSocketTask?
+    private var scenarioDeliveryTask: Task<Void, Never>?
+    private var scenarioDeliveryRevision = 0
     private var pendingRequests: [String: PendingRequest] = [:]
     private var pendingTimeouts: [String: Task<Void, Never>] = [:]
     private var activeImageKeys: Set<String> = []
@@ -410,11 +416,20 @@ final class MobileConnection: ObservableObject {
         return cache
     }()
 
-    init() {
-        let recoveryCache = UserDefaults.standard.data(forKey: "mobileRecoveryCache")
-            .flatMap { try? JSONDecoder().decode(MobileRecoveryCache.self, from: $0) }
+    init(
+        scenarioRuntime: MobileScenarioRuntime? = MobileScenarioRuntime.fromLaunchArguments(),
+        requestTimeout: Duration = .seconds(15)
+    ) {
+        self.scenarioRuntime = scenarioRuntime
+        self.requestTimeout = requestTimeout
+        let recoveryCache = scenarioRuntime == nil
+            ? UserDefaults.standard.data(forKey: "mobileRecoveryCache")
+                .flatMap { try? JSONDecoder().decode(MobileRecoveryCache.self, from: $0) }
+            : nil
         let restoredSessionProjects = recoveryCache?.sessionProjects
-                ?? UserDefaults.standard.dictionary(forKey: "sessionProjects") as? [String: String]
+                ?? (scenarioRuntime == nil
+                    ? UserDefaults.standard.dictionary(forKey: "sessionProjects") as? [String: String]
+                    : nil)
                 ?? [:]
         let restoredSessions = recoveryCache?.sessions ?? [:]
         let restoredEvents = recoveryCache?.sessionEvents ?? [:]
@@ -428,18 +443,27 @@ final class MobileConnection: ObservableObject {
         workspaceNavigations = recoveryCache?.workspaceNavigations ?? [:]
         fileBrowserNavigations = recoveryCache?.fileBrowserNavigations ?? [:]
         submittedInteractions = Set(recoveryCache?.submittedInteractions
-            ?? UserDefaults.standard.stringArray(forKey: "submittedInteractions") ?? [])
+            ?? (scenarioRuntime == nil ? UserDefaults.standard.stringArray(forKey: "submittedInteractions") : nil) ?? [])
         resolvedInteractions = Set(recoveryCache?.resolvedInteractions
-            ?? UserDefaults.standard.stringArray(forKey: "resolvedInteractions") ?? [])
-        UserDefaults.standard.removeObject(forKey: "sessionEventSequences")
-        UserDefaults.standard.removeObject(forKey: "sessionProjects")
-        UserDefaults.standard.removeObject(forKey: "submittedInteractions")
-        UserDefaults.standard.removeObject(forKey: "resolvedInteractions")
+            ?? (scenarioRuntime == nil ? UserDefaults.standard.stringArray(forKey: "resolvedInteractions") : nil) ?? [])
+        if scenarioRuntime == nil {
+            UserDefaults.standard.removeObject(forKey: "sessionEventSequences")
+            UserDefaults.standard.removeObject(forKey: "sessionProjects")
+            UserDefaults.standard.removeObject(forKey: "submittedInteractions")
+            UserDefaults.standard.removeObject(forKey: "resolvedInteractions")
+        }
         projects = recoveryCache?.projects ?? []
         sessions = restoredSessions
         sessionEvents = restoredEvents
-        if let id = UserDefaults.standard.string(forKey: "deviceId") { deviceId = id }
-        else { let id = UUID().uuidString; deviceId = id; UserDefaults.standard.set(id, forKey: "deviceId") }
+        if scenarioRuntime != nil {
+            deviceId = "scenario-ios"
+        } else if let id = UserDefaults.standard.string(forKey: "deviceId") {
+            deviceId = id
+        } else {
+            let id = UUID().uuidString
+            deviceId = id
+            UserDefaults.standard.set(id, forKey: "deviceId")
+        }
         for sessionId in Set(sessionEvents.keys).union(pendingInteractionEvents.keys) {
             sessionEventSequences[sessionId] = sessionEvents[sessionId]?.last?.sequence ?? -1
             sessionFeedItems[sessionId] = feedItems(allSessionEvents(sessionId))
@@ -449,7 +473,12 @@ final class MobileConnection: ObservableObject {
             subscribedSessionProjects[session.id] = session.projectId
         }
         trimRecoveryState()
-        if let server = UserDefaults.standard.string(forKey: "relayServer"), let token = CredentialStore.token(for: server) {
+        if let scenarioRuntime {
+            paired = scenarioRuntime.presence.paired
+            online = scenarioRuntime.presence.online
+            macDeviceId = scenarioRuntime.presence.macDeviceId
+            enqueueScenarioMessages(scenarioRuntime.start())
+        } else if let server = UserDefaults.standard.string(forKey: "relayServer"), let token = CredentialStore.token(for: server) {
             paired = true; connect(server: server, token: token)
         }
     }
@@ -470,7 +499,8 @@ final class MobileConnection: ObservableObject {
 
     func requestProjects() {
         guard online, let macDeviceId else { return }
-        send(type: "project.list", target: macDeviceId, payload: [:])
+        error = nil
+        send(type: "project.list", target: macDeviceId, payload: [:], pending: .projectList)
     }
 
     func requestSessions(projectId: String) {
@@ -522,6 +552,7 @@ final class MobileConnection: ObservableObject {
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
+        guard scenarioRuntime == nil else { return }
         switch phase {
         case .active:
             guard !online, let server = UserDefaults.standard.string(forKey: "relayServer"),
@@ -763,9 +794,11 @@ final class MobileConnection: ObservableObject {
         }
         var handled = false
         if type == "project.list.response", let response = try? JSONDecoder().decode(ProjectListPayload.self, from: payloadData) {
-            projects = response.projects
-            scheduleRecoveryPersistence()
-            handled = true
+            if let replyTo, case .some(.projectList) = pendingRequests[replyTo] {
+                projects = response.projects
+                scheduleRecoveryPersistence()
+                handled = true
+            }
         } else if type == "session.list.response", let projectId = message["projectId"] as? String,
                   let response = try? JSONDecoder().decode(SessionListPayload.self, from: payloadData) {
             if let replyTo, case let .some(.sessionList(expectedProjectId)) = pendingRequests[replyTo], expectedProjectId == projectId {
@@ -851,13 +884,22 @@ final class MobileConnection: ObservableObject {
         if let sessionId { message["sessionId"] = sessionId }
         if let pending {
             pendingRequests[id] = pending
-            pendingTimeouts[id] = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(15))
+            pendingTimeouts[id] = Task { [weak self, requestTimeout] in
+                try? await Task.sleep(for: requestTimeout)
                 guard !Task.isCancelled else { return }
                 self?.finishPending(id, error: "Request timed out")
             }
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: message), let text = String(data: data, encoding: .utf8), let socket else {
+        guard let data = try? JSONSerialization.data(withJSONObject: message) else {
+            if let pending { finishPending(id, error: "Not connected", clearInteractionSubmission: pending.isInteraction) }
+            return
+        }
+        if let scenarioRuntime {
+            enqueueScenarioMessages(scenarioRuntime.receive(data))
+            enqueueScenarioMessages(scenarioRuntime.drain())
+            return
+        }
+        guard let text = String(data: data, encoding: .utf8), let socket else {
             if let pending { finishPending(id, error: "Not connected", clearInteractionSubmission: pending.isInteraction) }
             return
         }
@@ -871,6 +913,8 @@ final class MobileConnection: ObservableObject {
         guard let pending = pendingRequests.removeValue(forKey: id) else { return }
         pendingTimeouts.removeValue(forKey: id)?.cancel()
         switch pending {
+        case .projectList:
+            if let message { error = message }
         case let .directory(key):
             loadingPaths.remove(key)
             if let message { directoryErrors[key] = message }
@@ -1003,6 +1047,7 @@ final class MobileConnection: ObservableObject {
     }
 
     private func scheduleRecoveryPersistence() {
+        guard scenarioRuntime == nil else { return }
         recoveryPersistenceTask?.cancel()
         recoveryPersistenceTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
@@ -1012,6 +1057,7 @@ final class MobileConnection: ObservableObject {
     }
 
     private func persistRecoveryState() {
+        guard scenarioRuntime == nil else { return }
         trimRecoveryState()
         let cache = recoveryCache().trimmedForPersistence(activeSessionId: activeSessionId)
         if let data = try? JSONEncoder().encode(cache), !MobileRecoveryPersistence.exceedsBudget(cache) {
@@ -1022,6 +1068,40 @@ final class MobileConnection: ObservableObject {
             let affectedSessionIds = MobileRecoveryPersistence.pendingSessionIds(in: cache)
             if !affectedSessionIds.isEmpty {
                 recoveryErrors = MobileRecoveryErrorState.recording(recoveryErrors, cache: cache)
+            }
+        }
+    }
+
+    func waitForScenarioIdle() async {
+        while let task = scenarioDeliveryTask {
+            let revision = scenarioDeliveryRevision
+            await task.value
+            guard revision == scenarioDeliveryRevision else { continue }
+            guard let scenarioRuntime else { return }
+            let messages = scenarioRuntime.drain()
+            guard !messages.isEmpty else { return }
+            enqueueScenarioMessages(messages)
+        }
+    }
+
+#if DEBUG
+    func injectScenarioInbound(_ messages: [Data]) {
+        guard scenarioRuntime != nil else { return }
+        enqueueScenarioMessages(messages)
+    }
+#endif
+
+    private func enqueueScenarioMessages(_ messages: [Data]) {
+        guard !messages.isEmpty else { return }
+        let previous = scenarioDeliveryTask
+        scenarioDeliveryRevision += 1
+        scenarioDeliveryTask = Task { @MainActor [weak self] in
+            await previous?.value
+            // Preserve the real socket's asynchronous boundary so UI controls finish their action before a response mutates them.
+            try? await Task.sleep(for: .milliseconds(25))
+            guard let self else { return }
+            for message in messages {
+                await self.handle(message)
             }
         }
     }
@@ -1284,6 +1364,8 @@ final class MobileConnection: ObservableObject {
     private func matchesResponse(_ pending: PendingRequest, type: String, source: String?, projectId: String?, sessionId: String?) -> Bool {
         guard type == pending.responseType, source == macDeviceId else { return false }
         switch pending {
+        case .projectList:
+            return projectId == nil && sessionId == nil
         case .directory, .text, .image, .imageList:
             return projectId != nil
         case let .sessionList(expectedProjectId), let .sessionCreate(expectedProjectId):

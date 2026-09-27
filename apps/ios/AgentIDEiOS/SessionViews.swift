@@ -61,7 +61,9 @@ struct SessionListView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 NavigationLink { FileBrowserView(project: project) } label: { Image(systemName: "folder") }
+                    .accessibilityLabel("Browse files")
                 Button { creating = true } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("Create session")
                     .disabled(!connection.online || project.enabledAgents.isEmpty)
             }
         }
@@ -122,7 +124,9 @@ private struct NewSessionView: View {
                     }
                 }
                 Section("Initial Task") {
-                    TextEditor(text: $initialTask).frame(minHeight: 160)
+                    TextEditor(text: $initialTask)
+                        .accessibilityLabel("Initial task")
+                        .frame(minHeight: 160)
                 }
                 if let error = connection.sessionErrors[project.id] {
                     Text(error).foregroundStyle(.red)
@@ -239,7 +243,8 @@ private struct AgentSessionView: View {
                     .padding()
                 }
                 .onChange(of: events.last?.sequence) {
-                    if let id = connection.sessionFeedItems[session.id]?.last?.id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
+                    guard let id = connection.sessionFeedItems[session.id]?.last?.id else { return }
+                    proxy.scrollTo(id, anchor: .bottom)
                 }
             }
             Divider()
@@ -401,6 +406,7 @@ private struct QuestionBlock: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(inactive)
+                .accessibilityIdentifier("question-option-\(option.id)")
             }
             if event.allowFreeText { TextField("Your answer", text: $freeText, axis: .vertical).textFieldStyle(.roundedBorder).disabled(inactive) }
             Button("Submit") {
@@ -408,6 +414,7 @@ private struct QuestionBlock: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(inactive || (selected.isEmpty && freeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+            .accessibilityIdentifier("question-submit-\(event.interactionId)")
             if historicallyResolved || connection.isResolved(sessionId: session.id, interactionId: event.interactionId) { Label("Responded", systemImage: "checkmark").font(.caption).foregroundStyle(.secondary) }
             else if connection.isSubmitted(sessionId: session.id, interactionId: event.interactionId) { Label("Response submitted", systemImage: "clock").font(.caption).foregroundStyle(.secondary) }
         }

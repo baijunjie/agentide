@@ -15,6 +15,21 @@
 对外入口：
 
 - `AgentIDEiOSApp`：iOS 可执行应用入口。
+- `pnpm test:ios`：在可用的 iPhone Simulator 上运行 iOS 单元、状态与 UI 自动化测试；可用 `AGENTIDE_IOS_SIMULATOR_ID` 指定模拟器，否则自动选择一个可用设备。
+
+### iOS Simulator 场景运行时
+
+DEBUG 构建可用启动参数 `-mobileScenario <场景名>` 或 `--mobile-scenario=<场景名>` 启用确定性的进程内 Mac 端替身。场景模式不建立 Relay 连接，也不读取或写入设备身份和恢复缓存；请求与事件仍编码为正式的 Envelope JSON，并进入 `MobileConnection` 原有的解码、请求关联和状态归并路径。因此模拟测试验证的是正式客户端状态流，而不是另一套仅供测试使用的界面逻辑。
+
+| 场景名 | 行为 |
+| --- | --- |
+| `comprehensive` | 提供项目、会话、会话创建、消息发送与取消、审批、提问、文本和图片文件浏览的完整闭环。 |
+| `offline` | 以已配对但 Mac 离线的状态启动，不提供远端项目。 |
+| `request-failure` | 为请求返回带 `replyTo` 的确定性失败响应。 |
+| `timeout` | 不返回请求响应，用于验证正式超时处理。 |
+| `invalid-response` | 从非预期 Mac 来源返回响应，用于验证来源校验。 |
+
+场景实现位于 `apps/ios/AgentIDEiOS/MobileScenario.swift`。自动化测试分别直接验证场景 Envelope 契约、场景经过 `MobileConnection` 后的状态，以及通过真实 SwiftUI 界面完成会话创建、发送与取消、审批、问题提交和文件浏览。
 
 ## Relay Server
 

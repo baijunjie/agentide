@@ -7,6 +7,7 @@
     "build": "pnpm -r build",
     "check": "pnpm -r check",
     "test": "pnpm -r test",
+    "test:ios": "scripts/test-ios.sh",
     "check:swift": "swift test --package-path packages/client-protocol-swift",
     "check:macos": "xcodebuild -project apps/macos/AgentIDEMac.xcodeproj -scheme AgentIDEMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build",
     "check:ios": "xcodebuild -project apps/ios/AgentIDEiOS.xcodeproj -scheme AgentIDEiOS -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build"

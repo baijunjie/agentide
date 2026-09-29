@@ -89,8 +89,10 @@ final class ScenarioSmokeUITests: XCTestCase {
         app.buttons["Send message"].tap()
         let cancelTurn = app.buttons["Cancel current turn"]
         XCTAssertTrue(cancelTurn.waitForExistence(timeout: 5))
+        XCTAssertFalse(((message.value as? String) ?? "").contains("Summarize"), "composer \(String(describing: message.value))")
         cancelTurn.tap()
         XCTAssertTrue(app.buttons["Send message"].waitForExistence(timeout: 5))
+        XCTAssertFalse(((message.value as? String) ?? "").contains("Summarize"), "composer after cancel \(String(describing: message.value))")
 
         app.navigationBars.buttons.firstMatch.tap()
         app.buttons["Browse files"].tap()
@@ -660,6 +662,153 @@ final class ScenarioSmokeUITests: XCTestCase {
 
         let changed = app.buttons["file-changed-Sources/App.swift"]
         XCTAssertTrue(scrollFullyAboveComposer(changed, in: app), "file card \(changed.frame) composer \(composer.frame)")
+    }
+
+    func testWaitingSessionLandsOnTheFirstUnansweredCard() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+
+        let feed = app.scrollViews["session-feed"]
+        XCTAssertTrue(feed.waitForExistence(timeout: 5))
+        let question = app.staticTexts["Which follow-up should run?"]
+        let started = app.staticTexts["Session started"]
+        let landed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            question.exists && feed.frame.height > 100
+                && question.frame.minY >= feed.frame.minY - 1
+                && question.frame.minY < feed.frame.maxY
+                && started.exists
+                && started.frame.maxY < feed.frame.minY
+        }, object: question)
+        XCTAssertEqual(XCTWaiter.wait(for: [landed], timeout: 5), .completed, "question \(question.frame) feed \(feed.frame)")
+        XCTAssertTrue(started.exists)
+        XCTAssertLessThan(started.frame.maxY, feed.frame.minY, "session started \(started.frame) feed \(feed.frame)")
+        XCTAssertTrue(app.buttons["pending-question"].exists)
+        XCTAssertTrue(app.buttons["pending-approval"].exists)
+
+        let inspection = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "separate paragraph")).firstMatch
+        XCTAssertTrue(inspection.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "InspectionI")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "continuing.The")).firstMatch.exists)
+    }
+
+    func testNewEventsStayPutAfterLeavingTheEnd() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        app.buttons["Create session"].tap()
+        let task = app.textViews["Initial task"]
+        XCTAssertTrue(task.waitForExistence(timeout: 5))
+        task.tap()
+        task.typeText("Inspect the simulated workspace")
+        app.buttons["Create"].tap()
+
+        let feed = app.scrollViews["session-feed"]
+        XCTAssertTrue(feed.waitForExistence(timeout: 5))
+        let send = app.buttons["Send message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5))
+        let anchor = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Created feed line 01")).firstMatch
+        let tail = app.staticTexts["The scenario task completed without a live connection."]
+        XCTAssertTrue(tail.waitForExistence(timeout: 5))
+        var leftTheEnd = false
+        for _ in 0..<12 {
+            if anchor.exists, tail.exists, feed.frame.height > 100,
+               anchor.frame.minY >= feed.frame.minY - 1,
+               anchor.frame.maxY <= feed.frame.maxY + 1,
+               tail.frame.minY > feed.frame.maxY {
+                leftTheEnd = true
+                break
+            }
+            drag(feed, moving: .earlier)
+        }
+        XCTAssertTrue(leftTheEnd, "anchor \(anchor.frame) tail \(tail.frame) feed \(feed.frame)")
+
+        let composer = app.textFields["session-composer"]
+        composer.tap()
+        composer.typeText("Leave the tail")
+        let anchorY = anchor.frame.minY
+        app.buttons["Send message"].tap()
+        let sent = app.staticTexts["Leave the tail"]
+        let stayed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            sent.exists && anchor.exists && feed.frame.height > 100
+                && abs(anchor.frame.minY - anchorY) < 48
+                && anchor.frame.maxY > feed.frame.minY
+                && anchor.frame.minY < feed.frame.maxY
+                && sent.frame.minY > feed.frame.maxY - 1
+        }, object: sent)
+        XCTAssertEqual(XCTWaiter.wait(for: [stayed], timeout: 5), .completed, "anchor \(anchor.frame) was \(anchorY) sent \(sent.frame) feed \(feed.frame)")
+    }
+
+    func testNewEventsFollowWhileStillAtTheEnd() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        app.buttons["Create session"].tap()
+        let task = app.textViews["Initial task"]
+        XCTAssertTrue(task.waitForExistence(timeout: 5))
+        task.tap()
+        task.typeText("Inspect the simulated workspace")
+        app.buttons["Create"].tap()
+
+        let feed = app.scrollViews["session-feed"]
+        XCTAssertTrue(feed.waitForExistence(timeout: 5))
+        let tail = app.staticTexts["The scenario task completed without a live connection."]
+        let landed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            tail.exists && feed.frame.height > 100
+                && tail.frame.minY >= feed.frame.minY - 1
+                && tail.frame.maxY <= feed.frame.maxY + 1
+        }, object: tail)
+        XCTAssertEqual(XCTWaiter.wait(for: [landed], timeout: 5), .completed, "tail \(tail.frame) feed \(feed.frame)")
+
+        let composer = app.textFields["session-composer"]
+        composer.tap()
+        composer.typeText("Stay at the tail")
+        app.buttons["Send message"].tap()
+        let sent = app.staticTexts["Stay at the tail"]
+        let followed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            sent.exists && feed.frame.height > 100
+                && sent.frame.minY >= feed.frame.minY - 1
+                && sent.frame.minY < feed.frame.maxY
+        }, object: sent)
+        XCTAssertEqual(XCTWaiter.wait(for: [followed], timeout: 5), .completed, "sent \(sent.frame) feed \(feed.frame)")
+    }
+
+    func testToolBlocksSummarizeAndCommandsUseTheirOwnBlock() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "interactions"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+
+        let tool = app.staticTexts["Read README"]
+        XCTAssertTrue(makeHittable(tool, in: app, moving: .later))
+        XCTAssertTrue(app.staticTexts["Running"].exists)
+        let fullJSON = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "UNIQUE-TAIL")).firstMatch
+        XCTAssertFalse(fullJSON.isHittable)
+        let disclosure = app.buttons["tool-json-read_file"]
+        XCTAssertTrue(makeHittable(disclosure, in: app, moving: .later))
+        disclosure.tap()
+        XCTAssertTrue(fullJSON.waitForExistence(timeout: 5))
+        XCTAssertTrue(makeHittable(fullJSON, in: app, moving: .later))
+
+        let command = app.staticTexts["swift test"]
+        XCTAssertTrue(makeHittable(command, in: app, moving: .later))
+        XCTAssertTrue(app.staticTexts["Completed · exit 0"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["command-block"].exists)
     }
 
     private func scrollFullyAboveComposer(_ element: XCUIElement, in app: XCUIApplication) -> Bool {

@@ -80,7 +80,7 @@ final class MobileScenarioRuntime {
         sessions = ["project-demo": [session]]
         let initialEvents = [
             Self.event(id: "event-0", sessionId: "session-demo", sequence: 0, type: "session.started", extra: ["nativeSessionId": "scenario-native"]),
-            Self.event(id: "event-1", sessionId: "session-demo", sequence: 1, type: "message", extra: ["role": "agent", "content": "I inspected the workspace and need approval before continuing.", "format": "markdown"]),
+            Self.event(id: "event-1", sessionId: "session-demo", sequence: 1, type: "message", extra: ["role": "agent", "content": "## Inspection\n\nI inspected the workspace and need approval before continuing.\n\nThe next step is a separate paragraph.", "format": "markdown"]),
             Self.event(id: "event-2", sessionId: "session-demo", sequence: 2, type: "status", extra: ["status": "waiting_user", "message": "Waiting for simulator input"]),
             Self.report(
                 id: "event-3", sequence: 3, reportId: "tests-demo", kind: "test_report",
@@ -126,7 +126,18 @@ final class MobileScenarioRuntime {
         let selectedEvents: [[String: Any]]
         switch scenario {
         case .interactions:
-            selectedEvents = initialEvents.filter { ($0["type"] as? String) != "report" }
+            let toolOutput = "alpha " + String(repeating: "word ", count: 30) + "UNIQUE-TAIL"
+            selectedEvents = initialEvents.filter { ($0["type"] as? String) != "report" } + [
+                Self.event(id: "event-tool-started", sessionId: "session-demo", sequence: 0, type: "tool.started", extra: [
+                    "toolName": "read_file", "title": "Read README", "input": ["path": "README.md"],
+                ]),
+                Self.event(id: "event-tool-finished", sessionId: "session-demo", sequence: 0, type: "tool.finished", extra: [
+                    "toolName": "read_file", "output": ["content": toolOutput],
+                ]),
+                Self.event(id: "event-command", sessionId: "session-demo", sequence: 0, type: "command", extra: [
+                    "command": "swift test", "status": "completed", "exitCode": 0,
+                ]),
+            ]
         case .reports:
             selectedEvents = initialEvents.filter { event in
                 let type = event["type"] as? String
@@ -210,6 +221,11 @@ final class MobileScenarioRuntime {
             let initialTask = ((request["payload"] as? [String: Any])?["initialTask"] as? String) ?? ""
             enqueue(event(sessionId: sessionId, type: "message", extra: ["role": "user", "content": initialTask, "format": "plain"]))
             enqueue(event(sessionId: sessionId, type: "status", extra: ["status": "running", "message": "Scenario task started"]))
+            // A new idle session has to be taller than the phone, or leaving the end cannot be distinguished from already sitting on it.
+            for index in 1...14 {
+                let line = String(format: "Created feed line %02d", index)
+                enqueue(event(sessionId: sessionId, type: "message", extra: ["role": "agent", "content": "\(line). This row keeps the new session taller than the viewport.", "format": "plain"]))
+            }
             enqueue(event(sessionId: sessionId, type: "message", extra: ["role": "agent", "content": "The scenario task completed without a live connection.", "format": "markdown"]))
             enqueue(event(sessionId: sessionId, type: "turn.completed", extra: ["outcome": "completed"]))
             enqueue(event(sessionId: sessionId, type: "status", extra: ["status": "idle"]))

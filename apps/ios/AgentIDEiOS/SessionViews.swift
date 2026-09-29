@@ -237,6 +237,9 @@ private struct AgentSessionView: View {
     let session: Session
     @State private var workspace = WorkspaceNavigationState()
     @State private var changedFileNavigation = ChangedFileNavigationCoordinator()
+    @State private var feedDidLand = false
+    /// New events follow the end only while it is still inside the viewport.
+    @State private var tailAtBottom = false
 
     init(project: RemoteProject, session: Session) {
         self.project = project
@@ -384,16 +387,20 @@ private struct AgentSessionView: View {
                                 .padding(12)
                                 .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                         }
+                        Color.clear
+                            .frame(height: 1)
+                            .accessibilityHidden(true)
+                            .background(FeedTailProbe { atBottom in
+                                if tailAtBottom != atBottom { tailAtBottom = atBottom }
+                            })
                     }
                     .padding()
                 }
                 .contentMargins(.bottom, 24, for: .scrollContent)
                 .layoutPriority(1)
                 .accessibilityIdentifier("session-feed")
-                .onChange(of: events.last?.sequence) {
-                    guard let id = connection.sessionFeedItems[session.id]?.last?.id else { return }
-                    proxy.scrollTo(id, anchor: .bottom)
-                }
+                .onAppear { followFeed(with: proxy) }
+                .onChange(of: events.last?.sequence) { followFeed(with: proxy) }
                 }
             }
             Divider()
@@ -429,6 +436,25 @@ private struct AgentSessionView: View {
             .padding()
         }
         // The measured bar height is the safe area this stack already follows. Padding by it again leaves a blank band under the bar.
+    }
+
+    /// The first time events are present, move to the earliest unanswered card. Later events move the viewport only while the reader is still at the end.
+    private func followFeed(with proxy: ScrollViewProxy) {
+        let items = connection.sessionFeedItems[session.id] ?? []
+        guard let lastID = items.last?.id else { return }
+        if !feedDidLand {
+            feedDidLand = true
+            if let pendingID = pendingAttention.first?.id {
+                tailAtBottom = false
+                proxy.scrollTo(pendingID, anchor: .top)
+            } else {
+                tailAtBottom = true
+                proxy.scrollTo(lastID, anchor: .bottom)
+            }
+            return
+        }
+        guard tailAtBottom else { return }
+        proxy.scrollTo(lastID, anchor: .bottom)
     }
 
     @ViewBuilder private func pendingButtons(scrollingWith proxy: ScrollViewProxy) -> some View {
@@ -558,8 +584,18 @@ private struct FeedBlock: View {
             MessageBlock(role: role, content: content, markdown: markdown)
         case let .event(event):
             switch event {
-            case let .toolStarted(value): ToolBlock(name: value.title ?? value.toolName, detail: jsonText(value.input), running: true, error: false)
-            case let .toolFinished(value): ToolBlock(name: value.toolName, detail: value.error ?? jsonText(value.output), running: false, error: value.error != nil)
+            case let .toolStarted(value):
+                let json = jsonText(value.input)
+                ToolBlock(name: value.title ?? value.toolName, status: "Running", summary: ToolSummary.line(json), json: json, failed: false)
+            case let .toolFinished(value):
+                let json = jsonText(value.output)
+                ToolBlock(
+                    name: value.toolName,
+                    status: value.error == nil ? "Completed" : "Failed",
+                    summary: ToolSummary.line(value.error ?? json),
+                    json: json,
+                    failed: value.error != nil
+                )
             case let .command(value): CommandBlock(event: value)
             case let .approvalRequested(value): ApprovalBlock(event: value, session: session, historicallyResolved: connection.isHistoricallyResolved(sessionId: session.id, interactionId: value.interactionId))
             case let .questionRequested(value): QuestionBlock(event: value, session: session, historicallyResolved: connection.isHistoricallyResolved(sessionId: session.id, interactionId: value.interactionId))
@@ -606,7 +642,7 @@ private struct MessageBlock: View {
         HStack {
             if role == .user { Spacer(minLength: 44) }
             Group {
-                if markdown, let attributed = try? AttributedString(markdown: content) { Text(attributed) }
+                if markdown { Text(MarkdownRendering.attributed(content)) }
                 else { Text(content) }
             }
             .textSelection(.enabled)
@@ -619,16 +655,35 @@ private struct MessageBlock: View {
 
 private struct ToolBlock: View {
     let name: String
-    let detail: String?
-    let running: Bool
-    let error: Bool
+    let status: String
+    let summary: String
+    let json: String?
+    let failed: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack { Image(systemName: error ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver"); Text(name).font(.headline); Spacer(); if running { ProgressView() } }
-            if let detail, !detail.isEmpty { Text(detail).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled) }
+            HStack {
+                Image(systemName: failed ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
+                Text(name).font(.headline)
+                Spacer()
+                Text(status).font(.caption).foregroundStyle(failed ? .red : .secondary)
+            }
+            if !summary.isEmpty {
+                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            if let json, !json.isEmpty {
+                DisclosureGroup {
+                    Text(json)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("tool-json-body-\(name)")
+                } label: {
+                    Text("JSON")
+                }
+                .accessibilityIdentifier("tool-json-\(name)")
+            }
         }
         .padding(12)
-        .background(error ? Color.red.opacity(0.08) : Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .background(failed ? Color.red.opacity(0.08) : Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -640,7 +695,8 @@ private struct CommandBlock: View {
             Text(commandSummary).font(.caption).foregroundStyle(event.status == .failed ? .red : .secondary)
         }
         .padding(12)
-        .background(Color.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityIdentifier("command-block")
     }
     private var commandSummary: String {
         if let exitCode = event.exitCode { return "\(event.status.rawValue.capitalized) · exit \(exitCode)" }
@@ -864,3 +920,127 @@ private func jsonText(_ value: JSONValue?) -> String? {
     guard let value, let data = try? JSONEncoder().encode(value) else { return nil }
     return String(data: data, encoding: .utf8)
 }
+
+/// A drag changes the scroll offset without moving the laid-out frame of the last row, so that frame cannot tell whether the reader is still at the end.
+private struct FeedTailProbe: UIViewRepresentable {
+    var onTail: (Bool) -> Void
+
+    func makeUIView(context: Context) -> FeedTailProbeView {
+        FeedTailProbeView()
+    }
+
+    func updateUIView(_ view: FeedTailProbeView, context: Context) {
+        view.onTail = onTail
+        view.attachIfNeeded()
+    }
+}
+
+private final class FeedTailProbeView: UIView {
+    var onTail: ((Bool) -> Void)?
+    private weak var scrollView: UIScrollView?
+    private var link: CADisplayLink?
+    private var follow = TailFollow()
+
+    func attachIfNeeded() {
+        guard let found = enclosingScrollView() else { return }
+        guard found !== scrollView else { return }
+        scrollView?.panGestureRecognizer.removeTarget(self, action: #selector(userScrolled))
+        scrollView = found
+        found.panGestureRecognizer.addTarget(self, action: #selector(userScrolled))
+        guard link == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        attachIfNeeded()
+    }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        guard newWindow == nil else { return }
+        link?.invalidate()
+        link = nil
+        scrollView?.panGestureRecognizer.removeTarget(self, action: #selector(userScrolled))
+        scrollView = nil
+    }
+
+    @objc private func userScrolled() {
+        follow.noteUserMoved()
+    }
+
+    @objc private func tick() {
+        guard let scrollView else { return }
+        guard let atBottom = follow.sample(
+            atBottom: Self.tailVisible(in: scrollView),
+            tracking: scrollView.isTracking,
+            dragging: scrollView.isDragging,
+            decelerating: scrollView.isDecelerating,
+            contentReady: Self.contentReady(scrollView)
+        ) else { return }
+        onTail?(atBottom)
+    }
+
+    private static func contentReady(_ scrollView: UIScrollView) -> Bool {
+        let inset = scrollView.adjustedContentInset
+        let visibleHeight = scrollView.bounds.height - inset.top - inset.bottom
+        return visibleHeight > 1 && scrollView.contentSize.height > visibleHeight + 1
+    }
+
+    private static func tailVisible(in scrollView: UIScrollView) -> Bool {
+        let inset = scrollView.adjustedContentInset
+        let maxOffsetY = scrollView.contentSize.height - scrollView.bounds.height + inset.bottom
+        return maxOffsetY - scrollView.contentOffset.y < 24
+    }
+
+    private func enclosingScrollView() -> UIScrollView? {
+        var view = superview
+        while let current = view {
+            if let scrollView = current as? UIScrollView { return scrollView }
+            view = current.superview
+        }
+        return nil
+    }
+}
+
+/// A flick is still inside the end threshold when the finger lifts; the rest of the travel is deceleration. Dropping the gesture there lets the next event pull the viewport back. A programmatic scroll also decelerates, so only a gesture the reader started can turn following off.
+struct TailFollow {
+    private var userMoved = false
+    private var lastPublished: Bool?
+
+    mutating func noteUserMoved() {
+        userMoved = true
+    }
+
+    /// `nil` means the follow flag stays as it is. Content that is not yet taller than the viewport is not evidence of either position.
+    mutating func sample(atBottom: Bool, tracking: Bool, dragging: Bool, decelerating: Bool, contentReady: Bool) -> Bool? {
+        if tracking || dragging { userMoved = true }
+        guard contentReady else { return nil }
+        if userMoved && !atBottom { return publish(false) }
+        if tracking || dragging || decelerating { return nil }
+        guard atBottom else { return nil }
+        userMoved = false
+        return publish(true)
+    }
+
+    private mutating func publish(_ value: Bool) -> Bool? {
+        guard lastPublished != value else { return nil }
+        lastPublished = value
+        return value
+    }
+}
+
+enum ToolSummary {
+    static let limit = 80
+
+    static func line(_ text: String?) -> String {
+        guard let text, !text.isEmpty else { return "" }
+        if text.count <= limit { return text }
+        let end = text.index(text.startIndex, offsetBy: limit - 1)
+        return String(text[..<end]) + "…"
+    }
+}
+
+

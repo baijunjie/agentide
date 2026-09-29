@@ -3,6 +3,56 @@ import AgentIDEProtocol
 @testable import AgentIDEiOS
 
 final class MobileScenarioTests: XCTestCase {
+    func testToolSummaryClipsToOneShortLine() {
+        XCTAssertEqual(ToolSummary.line(nil), "")
+        XCTAssertEqual(ToolSummary.line(""), "")
+        XCTAssertEqual(ToolSummary.line(String(repeating: "a", count: 80)).count, 80)
+        let clipped = ToolSummary.line(String(repeating: "a", count: 81))
+        XCTAssertEqual(clipped.count, 80)
+        XCTAssertTrue(clipped.hasSuffix("…"))
+    }
+
+    func testFlickCoastingPastTheEndStopsFollowing() {
+        var follow = TailFollow()
+        follow.noteUserMoved()
+        XCTAssertNil(follow.sample(atBottom: true, tracking: true, dragging: true, decelerating: false, contentReady: true))
+        XCTAssertNil(follow.sample(atBottom: true, tracking: false, dragging: false, decelerating: true, contentReady: true))
+        XCTAssertEqual(follow.sample(atBottom: false, tracking: false, dragging: false, decelerating: true, contentReady: true), false)
+        XCTAssertNil(follow.sample(atBottom: false, tracking: false, dragging: false, decelerating: false, contentReady: true))
+    }
+
+    func testProgrammaticDecelerationDoesNotStopFollowing() {
+        var follow = TailFollow()
+        XCTAssertNil(follow.sample(atBottom: false, tracking: false, dragging: false, decelerating: true, contentReady: true))
+        XCTAssertEqual(follow.sample(atBottom: true, tracking: false, dragging: false, decelerating: false, contentReady: true), true)
+    }
+
+    func testUnreadyFeedDoesNotTurnFollowingOn() {
+        var follow = TailFollow()
+        XCTAssertNil(follow.sample(atBottom: true, tracking: false, dragging: false, decelerating: false, contentReady: false))
+    }
+
+    func testSettlingBackAtTheEndResumesFollowing() {
+        var follow = TailFollow()
+        follow.noteUserMoved()
+        XCTAssertEqual(follow.sample(atBottom: false, tracking: true, dragging: true, decelerating: false, contentReady: true), false)
+        XCTAssertEqual(follow.sample(atBottom: true, tracking: false, dragging: false, decelerating: false, contentReady: true), true)
+    }
+
+    func testSessionMarkdownKeepsHeadingAndParagraphsApart() {
+        let rendered = String(MarkdownRendering.attributed("""
+        ## Inspection
+
+        I inspected the workspace and need approval before continuing.
+
+        The next step is a separate paragraph.
+        """).characters)
+        XCTAssertTrue(rendered.contains("Inspection"))
+        XCTAssertTrue(rendered.contains("separate paragraph"))
+        XCTAssertFalse(rendered.contains("InspectionI"))
+        XCTAssertFalse(rendered.contains("continuing.The"))
+    }
+
     func testReportDetailTruncationIsBoundedAtFiftyItems() {
         XCTAssertNil(ReportPresentation.truncationText(total: 50))
         XCTAssertEqual(

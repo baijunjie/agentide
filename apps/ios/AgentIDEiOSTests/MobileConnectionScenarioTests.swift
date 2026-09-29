@@ -55,10 +55,44 @@ final class MobileConnectionScenarioTests: XCTestCase {
 
         connection.updateDraft("Keep this draft", for: session.id)
         XCTAssertTrue(connection.sendDraft(session: session))
+        connection.updateDraft("Keep this draft", for: session.id)
         await connection.waitForScenarioIdle()
 
         XCTAssertEqual(connection.draft(for: session.id), "Keep this draft")
         XCTAssertEqual(connection.sessionError(for: session.id), "Scenario request failure")
+    }
+
+    func testFieldCommitOfTheSameTextClearsOnSuccess() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        connection.requestSessions(projectId: "project-demo")
+        await connection.waitForScenarioIdle()
+        let session = try XCTUnwrap(connection.sessions["project-demo"]?.first)
+
+        connection.updateDraft("Look at the failing test next", for: session.id)
+        XCTAssertTrue(connection.sendDraft(session: session))
+        connection.updateDraft("Look at the failing test next", for: session.id)
+        await connection.waitForScenarioIdle()
+
+        XCTAssertEqual(connection.draft(for: session.id), "")
+    }
+
+    func testDraftWriteAfterTheSendCommitIsKept() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        connection.requestSessions(projectId: "project-demo")
+        await connection.waitForScenarioIdle()
+        let session = try XCTUnwrap(connection.sessions["project-demo"]?.first)
+
+        connection.updateDraft("Look at the failing test next", for: session.id)
+        XCTAssertTrue(connection.sendDraft(session: session))
+        connection.updateDraft("Look at the failing test next", for: session.id)
+        connection.updateDraft("Look at the failing test next", for: session.id)
+        await connection.waitForScenarioIdle()
+
+        XCTAssertEqual(connection.draft(for: session.id), "Look at the failing test next")
     }
 
     func testComprehensiveScenarioExercisesConnectionStateWithoutNetwork() async throws {

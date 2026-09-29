@@ -99,8 +99,10 @@ private extension PendingInteraction {
 @MainActor
 final class MobileConnection: ObservableObject {
     struct Claim: Decodable { let token: String }
+    /// `revision` is the draft version captured by Send. The text field then writes that same string once more; `absorbIdenticalWrite` ignores that one commit so it is not treated as an edit made while waiting.
     private struct SubmittedDraft {
         let revision: Int
+        var absorbIdenticalWrite: Bool
     }
     private enum PendingRequest {
         case projectList
@@ -463,6 +465,11 @@ final class MobileConnection: ObservableObject {
     }
 
     func updateDraft(_ draft: String, for sessionId: String) {
+        if var submitted = submittedDrafts[sessionId], submitted.absorbIdenticalWrite {
+            submitted.absorbIdenticalWrite = false
+            submittedDrafts[sessionId] = submitted
+            if (sessionDrafts[sessionId] ?? "") == draft { return }
+        }
         draftRevisions[sessionId, default: 0] += 1
         if draft.isEmpty { sessionDrafts.removeValue(forKey: sessionId) }
         else { sessionDrafts[sessionId] = draft }
@@ -538,7 +545,10 @@ final class MobileConnection: ObservableObject {
     func sendDraft(session: Session) -> Bool {
         let draft = draft(for: session.id)
         guard sendMessage(session: session, content: draft) else { return false }
-        submittedDrafts[session.id] = SubmittedDraft(revision: draftRevisions[session.id, default: 0])
+        submittedDrafts[session.id] = SubmittedDraft(
+            revision: draftRevisions[session.id, default: 0],
+            absorbIdenticalWrite: true
+        )
         return true
     }
 

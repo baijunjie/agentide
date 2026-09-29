@@ -223,8 +223,8 @@ private struct AgentSessionView: View {
     private var isSending: Bool { connection.activeSessionOperations.contains("send:\(session.id)") }
 
     var body: some View {
-        WorkspaceNavigationContainer(navigation: $workspace) { navigationInset in
-            sessionContent(topClearance: navigationInset)
+        WorkspaceNavigationContainer(navigation: $workspace) { _ in
+            sessionContent
         } browserContent: {
             FileBrowserContent(
                 project: project,
@@ -314,7 +314,7 @@ private struct AgentSessionView: View {
         }
     }
 
-    private func sessionContent(topClearance: CGFloat) -> some View {
+    private var sessionContent: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
@@ -339,7 +339,8 @@ private struct AgentSessionView: View {
                         Divider()
                     }
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    // The last card sits on the viewport edge. A lazy stack remeasures it when it grows and never settles.
+                    VStack(alignment: .leading, spacing: 12) {
                         StatusBadge(status: status)
                             .accessibilityIdentifier("session-status")
                         if events.isEmpty {
@@ -368,6 +369,7 @@ private struct AgentSessionView: View {
                     }
                     .padding()
                 }
+                .layoutPriority(1)
                 .accessibilityIdentifier("session-feed")
                 .onChange(of: events.last?.sequence) {
                     guard let id = connection.sessionFeedItems[session.id]?.last?.id else { return }
@@ -385,6 +387,8 @@ private struct AgentSessionView: View {
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("Message the agent", text: draftBinding, axis: .vertical)
                     .lineLimit(1...5)
+                    // The feed already takes the leftover height. Letting this field do the same makes the stack renegotiate forever once activity grows.
+                    .fixedSize(horizontal: false, vertical: true)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("session-composer")
                     .disabled(!canSend(status) || isSending)
@@ -404,7 +408,7 @@ private struct AgentSessionView: View {
             }
             .padding()
         }
-        .padding(.top, topClearance)
+        // The measured bar height is the safe area this stack already follows. Padding by it again leaves a blank band under the bar.
     }
 
     private struct PendingAttention: Identifiable {
@@ -673,6 +677,8 @@ private struct QuestionBlock: View {
             }
             if event.allowFreeText {
                 TextField("Your answer", text: $freeText, axis: .vertical)
+                    // Inside the feed, a flexible height proposal is treated as content and the two grow each other.
+                    .fixedSize(horizontal: false, vertical: true)
                     .textFieldStyle(.roundedBorder)
                     .focused($freeTextFocused)
                     .disabled(inactive)

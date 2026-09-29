@@ -28,7 +28,7 @@ private struct FileActionsMenu<Label: View>: View {
                 Button("Copy Agent Reference") { UIPasteboard.general.string = reference }
                     .accessibilityIdentifier("copy-agent-reference")
                 if let sendToAgent {
-                    Button("Send to Agent") { sendToAgent(reference) }
+                    Button("Add Reference to Draft") { sendToAgent(reference) }
                         .accessibilityIdentifier("send-reference-to-agent")
                 }
             }
@@ -195,16 +195,24 @@ private struct SourceContent: View {
         return (1...count).map(String.init).joined(separator: "\n")
     }
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
+        // A bidirectional scroll view centers a short file. Line numbers stay outside the horizontal scroll so they remain while a long line moves.
+        ScrollView {
             HStack(alignment: .top, spacing: 12) {
-                Text(lineNumbers).foregroundStyle(.tertiary).multilineTextAlignment(.trailing)
+                Text(lineNumbers)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.trailing)
                 Divider()
-                Text(content).textSelection(.enabled)
+                ScrollView(.horizontal) {
+                    Text(content.isEmpty ? " " : content)
+                        .textSelection(.enabled)
+                }
+                .scrollIndicators(.visible)
+                .defaultScrollAnchor(.leading)
             }
             .font(.system(size: 14, design: .monospaced))
-            .fixedSize(horizontal: true, vertical: true)
             .padding()
         }
+        .defaultScrollAnchor(.top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

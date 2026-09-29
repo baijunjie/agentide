@@ -20,7 +20,7 @@ Mac 与 iPhone 各自持有稳定的设备标识和 Relay 签发的长期 token�
 
 过期、已使用、secret 不匹配或试图覆盖未撤销 iPhone 身份的认领统一失败，不产生部分绑定。
 
-尚未配对时，iPhone 的导航标题是 `AgentIDE`。页面说明在 Mac 上打开 AgentIDE，选择 Pairing，创建配对码后再扫码。主动作仍是 `Scan Pairing QR`。
+尚未配对时，iPhone 的导航标题是 `AgentIDE`。页面说明在 Mac 上打开 AgentIDE，选择 Pairing，创建配对码后再扫码。主动作仍是 `Scan Pairing QR`。扫码页可以 `Close` 离开。没有相机预览时显示 `No Camera Preview`，并说明 `This device is not showing a camera picture, so a pairing code cannot be scanned from here.`。
 
 ## 连接、在线状态与路由
 
@@ -36,7 +36,7 @@ Relay 每 15 秒发送 WebSocket ping；连续一个心跳周期未收到 pong �
 
 Mac 可以撤销已绑定的 iPhone。撤销会使目标 token 失效、删除相关绑定并以专用关闭码断开目标的现有 WebSocket；iOS 收到该关闭码后删除 Keychain 中的 token 并回到未配对状态。之后可使用新的二维码重新绑定，同一 iPhone 设备标识会取得新 token。
 
-已鉴权设备也可以撤销自身；iPhone 不能撤销已绑定的 Mac。已配对后，iPhone 的项目页可以解除这台手机：确认 `Unpair this iPhone?` 后只撤销自身，不撤销 Mac，也不显示 Mac 的名字。同一页展示本机设备标识，以及 `Mac Online` / `Mac Offline`。解除失败是单独的提示，不会把项目列表换成失败页。
+已鉴权设备也可以撤销自身；iPhone 不能撤销已绑定的 Mac。已配对后，iPhone 的项目页可以解除这台手机，入口只有 `Unpair this iPhone`。确认 `Unpair this iPhone?` 后只撤销自身，不撤销 Mac，也不显示 Mac 的名字。`This iPhone` 一节展示本机设备标识，下面的说明是 `This identifier is for this iPhone.`，不在这里再显示 `Mac Online` / `Mac Offline`。解除失败是单独的提示，不会把项目列表换成失败页。
 
 ## Relay 部署约束
 

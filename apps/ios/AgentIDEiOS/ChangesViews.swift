@@ -112,34 +112,60 @@ private struct ChangeRow: View {
     var showsDisclosure = false
 
     var body: some View {
+        if showsDisclosure {
+            // The spatial column is the screen minus the layer behind it. A trailing size and chevron take that width from the path.
+            spatialBody
+        } else {
+            fullWidthBody
+        }
+    }
+
+    private var fullWidthBody: some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol).foregroundStyle(tint).frame(width: 22)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(change.relativePath)
-                    .font(.body.monospaced())
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let previous = change.previousRelativePath {
-                    Text(previous)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Text("\(change.area.rawValue.capitalized) · \(change.kind.rawValue.capitalized)\(change.isBinary ? " · Binary" : "")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            icon
+            labelStack
             Spacer()
             Text(size).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            if showsDisclosure {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
         }
         .accessibilityHint("View diff")
+    }
+
+    private var spatialBody: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            icon
+            VStack(alignment: .leading, spacing: 3) {
+                labelStack
+                if !size.isEmpty {
+                    Text(size).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityHint("View diff")
+    }
+
+    private var icon: some View {
+        Image(systemName: symbol).foregroundStyle(tint).frame(width: 22)
+    }
+
+    private var labelStack: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(change.relativePath)
+                .font(.body.monospaced())
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let previous = change.previousRelativePath {
+                Text(previous)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text(statusLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
     }
 
     private var symbol: String {
@@ -152,6 +178,9 @@ private struct ChangeRow: View {
     }
 
     private var tint: Color { change.kind == .deleted ? .red : (change.kind == .modified ? .orange : .green) }
+    private var statusLine: String {
+        "\(change.area.rawValue.capitalized) · \(change.kind.rawValue.capitalized)\(change.isBinary ? " · Binary" : "")"
+    }
     private var size: String { [change.oldSize, change.newSize].compactMap { $0 }.map { "\($0) B" }.joined(separator: " → ") }
 }
 
@@ -260,21 +289,82 @@ private struct DiffText: View {
     let diff: String
 
     var body: some View {
-        // One scroll view on both axes centers a short diff and clips the leading edge of the first line.
+        // One scroll view on both axes centers a short diff. Header lines wrap in the vertical scroll so git paths stay inside the spatial column; numbered lines scroll sideways.
         ScrollView {
-            ScrollView(.horizontal) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(DiffParser.parse(diff).enumerated()), id: \.offset) { _, line in
-                        DiffLine(line: line)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(diffBlocks.enumerated()), id: \.offset) { _, block in
+                    switch block {
+                    case .prose(let lines):
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                                DiffProseLine(line: line)
+                            }
+                        }
+                        .padding(.horizontal)
+                    case .code(let lines):
+                        ScrollView(.horizontal) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                                    DiffLine(line: line)
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                        .defaultScrollAnchor(.leading)
                     }
                 }
-                .font(.system(size: 13, design: .monospaced))
-                .padding()
             }
-            .defaultScrollAnchor(.leading)
+            .font(.system(size: 13, design: .monospaced))
+            .padding(.vertical)
         }
         .defaultScrollAnchor(.top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var diffBlocks: [DiffBlock] {
+        var blocks: [DiffBlock] = []
+        var prose: [ParsedDiffLine] = []
+        var code: [ParsedDiffLine] = []
+        func flushProse() {
+            if !prose.isEmpty {
+                blocks.append(.prose(prose))
+                prose = []
+            }
+        }
+        func flushCode() {
+            if !code.isEmpty {
+                blocks.append(.code(code))
+                code = []
+            }
+        }
+        for line in DiffParser.parse(diff) {
+            if line.oldLine == nil && line.newLine == nil {
+                flushCode()
+                prose.append(line)
+            } else {
+                flushProse()
+                code.append(line)
+            }
+        }
+        flushProse()
+        flushCode()
+        return blocks
+    }
+}
+
+private enum DiffBlock {
+    case prose([ParsedDiffLine])
+    case code([ParsedDiffLine])
+}
+
+private struct DiffProseLine: View {
+    let line: ParsedDiffLine
+
+    var body: some View {
+        Text(line.text.isEmpty ? " " : line.text)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier(line.text.hasPrefix("@@") ? "diff-hunk" : "diff-line")
     }
 }
 

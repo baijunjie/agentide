@@ -15,6 +15,11 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(session.waitForExistence(timeout: 5))
         session.tap()
 
+        let pendingQuestion = app.buttons["pending-question"]
+        XCTAssertTrue(pendingQuestion.waitForExistence(timeout: 5))
+        let navigationBottom = app.navigationBars.firstMatch.frame.maxY
+        XCTAssertGreaterThanOrEqual(pendingQuestion.frame.minY, navigationBottom - 1)
+        XCTAssertLessThan(pendingQuestion.frame.minY - navigationBottom, 20)
         XCTAssertTrue(app.buttons["question-option-tests"].waitForExistence(timeout: 5))
         let approve = app.buttons["Approve Once"]
         XCTAssertTrue(makeHittable(approve, in: app, moving: .later))
@@ -72,7 +77,7 @@ final class ScenarioSmokeUITests: XCTestCase {
         let fileActions = app.buttons["file-actions"]
         XCTAssertTrue(fileActions.waitForExistence(timeout: 5))
         fileActions.tap()
-        let sendReference = app.buttons["Send to Agent"]
+        let sendReference = app.buttons["Add Reference to Draft"]
         XCTAssertTrue(sendReference.waitForExistence(timeout: 5))
         sendReference.tap()
 
@@ -97,7 +102,144 @@ final class ScenarioSmokeUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(scenarioText.waitForExistence(timeout: 5))
         app.buttons["file-actions"].tap()
-        XCTAssertFalse(app.buttons["Send to Agent"].exists)
+        XCTAssertFalse(app.buttons["Add Reference to Draft"].exists)
+    }
+
+    func testSpatialChangesAndDiffStayReadable() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+
+        app.buttons["session-changes"].tap()
+        XCTAssertTrue(app.staticTexts["Staged"].waitForExistence(timeout: 5))
+        let pathFont = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
+        let statusFont = UIFont.preferredFont(forTextStyle: .caption1)
+        assertLaidOutInFull("README.md", font: pathFont, in: app)
+        assertLaidOutInFull("Sources/App.swift", font: pathFont, in: app)
+        assertLaidOutInFull("assets/logo.png", font: pathFont, in: app)
+        assertLaidOutInFull("Staged · Added", font: statusFont, in: app)
+        assertLaidOutInFull("Unstaged · Modified", font: statusFont, in: app)
+        assertLaidOutInFull("Unstaged · Modified · Binary", font: statusFont, in: app)
+
+        app.buttons["change-unstaged-Sources/App.swift"].tap()
+        let hunk = app.staticTexts["diff-hunk"]
+        XCTAssertTrue(hunk.waitForExistence(timeout: 5))
+        XCTAssertLessThan(hunk.frame.minY, 360)
+        let gitLine = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "diff --git")).firstMatch
+        XCTAssertTrue(gitLine.waitForExistence(timeout: 5))
+        let window = app.windows.firstMatch.frame
+        XCTAssertGreaterThanOrEqual(gitLine.frame.minX, window.minX - 1)
+        XCTAssertLessThanOrEqual(gitLine.frame.maxX, window.maxX + 1, "git header frame \(gitLine.frame) outside \(window)")
+
+        app.buttons["Back"].tap()
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.buttons["session-changes"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["session-list-changes"].tap()
+        XCTAssertTrue(app.buttons["changes-refresh"].waitForExistence(timeout: 5))
+        assertLaidOutInFull("Sources/App.swift", font: pathFont, in: app)
+        XCTAssertTrue(app.staticTexts["24 B → 30 B"].exists)
+        XCTAssertTrue(app.staticTexts["8 B → 12 B"].exists)
+    }
+
+    func testSourceStaysUnderThePathAndScrollsPastLineNumbers() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+        let browseFiles = app.buttons["session-browse-files"]
+        XCTAssertTrue(browseFiles.waitForExistence(timeout: 5))
+        browseFiles.tap()
+        XCTAssertTrue(app.staticTexts["Sources"].waitForExistence(timeout: 5))
+        app.staticTexts["Sources"].tap()
+        let sourceFile = app.staticTexts["App.swift"]
+        XCTAssertTrue(sourceFile.waitForExistence(timeout: 5))
+        sourceFile.tap()
+
+        // The whole file is one text element; a single source line is not its own accessibility element.
+        let body = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "# Scenario workspace")
+        ).firstMatch
+        XCTAssertTrue(body.waitForExistence(timeout: 5))
+        XCTAssertTrue(body.label.contains("This file is served by the deterministic simulator scenario."))
+        let navigationBottom = app.navigationBars.firstMatch.frame.maxY
+        XCTAssertGreaterThan(body.frame.minY, navigationBottom)
+        XCTAssertLessThan(body.frame.minY, navigationBottom + 120)
+        let lineNumbers = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "1\n")
+        ).firstMatch
+        XCTAssertTrue(lineNumbers.exists)
+        let lineNumberX = lineNumbers.frame.minX
+        let bodyX = body.frame.minX
+        body.swipeLeft()
+        XCTAssertEqual(lineNumbers.frame.minX, lineNumberX, accuracy: 1)
+        XCTAssertLessThan(body.frame.minX, bodyX - 8)
+    }
+
+    func testSessionActivitySitsUnderTheNavigationBarInDarkMode() {
+        XCUIDevice.shared.appearance = .dark
+        defer { XCUIDevice.shared.appearance = .light }
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "interactions"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.staticTexts["Scenario approval"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario approval"].tap()
+        let pendingQuestion = app.buttons["pending-question"]
+        XCTAssertTrue(pendingQuestion.waitForExistence(timeout: 5))
+        let navigationBottom = app.navigationBars.firstMatch.frame.maxY
+        XCTAssertGreaterThanOrEqual(pendingQuestion.frame.minY, navigationBottom - 1)
+        XCTAssertLessThan(pendingQuestion.frame.minY - navigationBottom, 20)
+        XCTAssertTrue(app.staticTexts["Waiting for you"].exists)
+        XCTAssertTrue(app.staticTexts["Answer the question or approval before sending another message."].exists)
+    }
+
+    func testProjectHomeAndPairingScanner() {
+        let offline = XCUIApplication()
+        offline.launchArguments = ["-mobileScenario", "offline"]
+        offline.launch()
+        XCTAssertTrue(offline.staticTexts["Mac Offline"].waitForExistence(timeout: 5))
+        XCTAssertEqual(offline.staticTexts.matching(NSPredicate(format: "label == %@", "Mac Offline")).count, 1)
+        XCTAssertEqual(offline.buttons.matching(NSPredicate(format: "label == %@", "Unpair this iPhone")).count, 1)
+        XCTAssertTrue(offline.staticTexts["scenario-ios"].exists)
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "comprehensive"]
+        app.launch()
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "Mac Online")).count, 1)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Unpair this iPhone")).count, 1)
+        XCTAssertTrue(app.staticTexts["This identifier is for this iPhone."].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["scenario-ios"].exists)
+        app.buttons["Unpair this iPhone"].tap()
+        let unpairSheet = app.sheets["Unpair this iPhone?"]
+        let unpairAlert = app.alerts["Unpair this iPhone?"]
+        if unpairSheet.waitForExistence(timeout: 5) {
+            unpairSheet.buttons["Unpair"].tap()
+        } else {
+            XCTAssertTrue(unpairAlert.waitForExistence(timeout: 2))
+            unpairAlert.buttons["Unpair"].tap()
+        }
+        XCTAssertTrue(app.staticTexts["No Mac paired"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["AgentIDE"].exists)
+        let navigationBottom = app.navigationBars["AgentIDE"].frame.maxY
+        let titlesBelowNavigation = app.staticTexts.matching(NSPredicate(format: "label == %@", "AgentIDE")).allElementsBoundByIndex.filter { title in
+            title.frame.minY >= navigationBottom - 1
+        }
+        XCTAssertEqual(titlesBelowNavigation.count, 0)
+        app.buttons["Scan Pairing QR"].tap()
+        XCTAssertTrue(app.staticTexts["No Camera Preview"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Close"].exists)
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.buttons["Scan Pairing QR"].waitForExistence(timeout: 5))
     }
 
     func testComprehensiveScenarioOpensChangesDiffAndReturnsToSession() {
@@ -158,6 +300,7 @@ final class ScenarioSmokeUITests: XCTestCase {
 
         let testReport = app.buttons["report-test_report"]
         XCTAssertTrue(testReport.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["report-icon-failed"].exists)
         assertMetric("report-test-total", contains: ["42", "Total"], in: app)
         assertMetric("report-test-passed", contains: ["40", "Passed"], in: app)
         assertMetric("report-test-failed", contains: ["1", "Failed"], in: app)
@@ -254,8 +397,8 @@ final class ScenarioSmokeUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["file-actions"].waitForExistence(timeout: 5))
         app.buttons["file-actions"].tap()
-        XCTAssertTrue(app.buttons["Send to Agent"].waitForExistence(timeout: 5))
-        app.buttons["Send to Agent"].tap()
+        XCTAssertTrue(app.buttons["Add Reference to Draft"].waitForExistence(timeout: 5))
+        app.buttons["Add Reference to Draft"].tap()
         let composer = app.textFields["session-composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         XCTAssertEqual(composer.value as? String, "@Sources/Context Guide.md")
@@ -303,10 +446,16 @@ final class ScenarioSmokeUITests: XCTestCase {
 
         let offline = launch(scenario: "offline")
         XCTAssertTrue(offline.staticTexts["Mac Offline"].waitForExistence(timeout: 5))
+        XCTAssertEqual(offline.staticTexts.matching(NSPredicate(format: "label == %@", "Mac Offline")).count, 1)
+        XCTAssertEqual(offline.buttons.matching(NSPredicate(format: "label == %@", "Unpair this iPhone")).count, 1)
         XCTAssertTrue(offline.staticTexts["Projects appear when your Mac is online."].exists)
         XCTAssertTrue(offline.staticTexts["scenario-ios"].exists)
 
         let app = launch(scenario: "comprehensive")
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "Mac Online")).count, 1)
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Unpair this iPhone")).count, 1)
+        XCTAssertTrue(app.staticTexts["This identifier is for this iPhone."].exists)
+        XCTAssertTrue(app.staticTexts["scenario-ios"].exists)
         XCTAssertTrue(app.staticTexts["Codex · Claude"].waitForExistence(timeout: 5))
         let online = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Online")).firstMatch
         XCTAssertTrue(online.waitForExistence(timeout: 5))
@@ -322,6 +471,11 @@ final class ScenarioSmokeUITests: XCTestCase {
 
         app.staticTexts["Scenario approval"].tap()
         XCTAssertTrue(app.navigationBars["Scenario approval"].waitForExistence(timeout: 5))
+        let pendingQuestion = app.buttons["pending-question"]
+        XCTAssertTrue(pendingQuestion.waitForExistence(timeout: 5))
+        let navigationBottom = app.navigationBars.firstMatch.frame.maxY
+        XCTAssertGreaterThanOrEqual(pendingQuestion.frame.minY, navigationBottom - 1)
+        XCTAssertLessThan(pendingQuestion.frame.minY - navigationBottom, 20)
         XCTAssertTrue(app.staticTexts["Waiting for you"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Waiting User"].exists)
         XCTAssertTrue(app.buttons["pending-question"].exists)
@@ -356,6 +510,14 @@ final class ScenarioSmokeUITests: XCTestCase {
         app.buttons["session-changes"].tap()
         XCTAssertTrue(app.staticTexts["Staged"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Unstaged"].exists)
+        let pathFont = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
+        let statusFont = UIFont.preferredFont(forTextStyle: .caption1)
+        assertLaidOutInFull("README.md", font: pathFont, in: app)
+        assertLaidOutInFull("Sources/App.swift", font: pathFont, in: app)
+        assertLaidOutInFull("assets/logo.png", font: pathFont, in: app)
+        assertLaidOutInFull("Staged · Added", font: statusFont, in: app)
+        assertLaidOutInFull("Unstaged · Modified", font: statusFont, in: app)
+        assertLaidOutInFull("Unstaged · Modified · Binary", font: statusFont, in: app)
         let change = app.buttons["change-unstaged-Sources/App.swift"]
         XCTAssertTrue(change.waitForExistence(timeout: 5))
         change.tap()
@@ -365,12 +527,23 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertLessThan(hunk.frame.minY, 360)
         let gitLine = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "diff --git")).firstMatch
         XCTAssertTrue(gitLine.exists)
+        XCTAssertTrue(gitLine.label.contains("a/Sources/App.swift"))
         XCTAssertTrue(gitLine.label.contains("b/Sources/App.swift"))
+        let window = app.windows.firstMatch.frame
+        XCTAssertGreaterThanOrEqual(gitLine.frame.minX, window.minX - 1)
+        XCTAssertLessThanOrEqual(gitLine.frame.maxX, window.maxX + 1)
         app.buttons["Back"].tap()
         XCTAssertTrue(app.buttons["change-unstaged-Sources/App.swift"].waitForExistence(timeout: 5))
         app.buttons["Back"].tap()
         XCTAssertTrue(app.buttons["session-changes"].waitForExistence(timeout: 5))
 
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["Create session"].waitForExistence(timeout: 5))
+        app.buttons["session-list-changes"].tap()
+        XCTAssertTrue(app.buttons["changes-refresh"].waitForExistence(timeout: 5))
+        assertLaidOutInFull("Sources/App.swift", font: pathFont, in: app)
+        XCTAssertTrue(app.staticTexts["24 B → 30 B"].exists)
+        XCTAssertTrue(app.staticTexts["8 B → 12 B"].exists)
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.buttons["Create session"].waitForExistence(timeout: 5))
         app.navigationBars.buttons.firstMatch.tap()
@@ -385,9 +558,19 @@ final class ScenarioSmokeUITests: XCTestCase {
             unpairAlert.buttons["Unpair"].tap()
         }
         XCTAssertTrue(app.staticTexts["No Mac paired"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["AgentIDE"].exists)
+        XCTAssertTrue(app.navigationBars["AgentIDE"].exists)
+        let pairingNavigationBottom = app.navigationBars["AgentIDE"].frame.maxY
+        let titlesBelowNavigation = app.staticTexts.matching(NSPredicate(format: "label == %@", "AgentIDE")).allElementsBoundByIndex.filter { title in
+            title.frame.minY >= pairingNavigationBottom - 1
+        }
+        XCTAssertEqual(titlesBelowNavigation.count, 0)
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "choose Pairing")).firstMatch.exists)
         XCTAssertTrue(app.buttons["Scan Pairing QR"].exists)
+        app.buttons["Scan Pairing QR"].tap()
+        XCTAssertTrue(app.staticTexts["No Camera Preview"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Close"].exists)
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.buttons["Scan Pairing QR"].waitForExistence(timeout: 5))
 
         let notGit = openChanges(scenario: "not-git")
         XCTAssertTrue(notGit.staticTexts["Not a Git Repository"].waitForExistence(timeout: 5))
@@ -473,6 +656,24 @@ final class ScenarioSmokeUITests: XCTestCase {
         let top = app.navigationBars.firstMatch.frame.maxY
         let bottom = app.textFields["session-composer"].frame.minY
         return element.frame.midY >= top && element.frame.midY <= bottom
+    }
+
+    private func assertLaidOutInFull(_ label: String, font: UIFont, in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let element = app.staticTexts[label].firstMatch
+        XCTAssertTrue(element.waitForExistence(timeout: 5), label, file: file, line: line)
+        let query = app.staticTexts.matching(NSPredicate(format: "label == %@", label))
+        let expected = (label as NSString).size(withAttributes: [.font: font]).width
+        let window = app.windows.firstMatch.frame
+        var frames: [String] = []
+        var visible = false
+        for index in 0..<query.count {
+            let candidate = query.element(boundBy: index)
+            frames.append("\(candidate.frame)")
+            let startsOnScreen = candidate.frame.minX >= window.minX - 1 && candidate.frame.minX < window.maxX
+            let glyphsFit = candidate.frame.width + 1 >= expected && candidate.frame.minX + expected <= window.maxX + 2
+            if startsOnScreen && glyphsFit { visible = true }
+        }
+        XCTAssertTrue(visible, "\(label) expected width \(expected) window \(window) frames \(frames.joined(separator: " "))", file: file, line: line)
     }
 
     private func assertMetric(_ identifier: String, contains values: [String], in app: XCUIApplication) {

@@ -11,7 +11,10 @@ struct MobileHomeView: View {
             if connection.paired { projectList } else { pairingPrompt }
         }
         .sheet(isPresented: $scanning) {
-            QRScanner { value in scanning = false; Task { await connection.claim(qrValue: value) } }.ignoresSafeArea()
+            ScannerSheet { value in
+                scanning = false
+                Task { await connection.claim(qrValue: value) }
+            }
         }
         .confirmationDialog("Unpair this iPhone?", isPresented: $confirmingUnpair, titleVisibility: .visible) {
             Button("Unpair", role: .destructive) { Task { await connection.revokeSelf() } }
@@ -70,7 +73,7 @@ struct MobileHomeView: View {
                     Text(connection.localDeviceId)
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
-                    Text(connection.online ? "Mac Online" : "Mac Offline")
+                    Text("This identifier is for this iPhone.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Unpair this iPhone", role: .destructive) { confirmingUnpair = true }
@@ -79,12 +82,6 @@ struct MobileHomeView: View {
         }
         .navigationTitle("Projects")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Unpair") { confirmingUnpair = true }
-                    .accessibilityLabel("Unpair this iPhone")
-            }
-        }
         .refreshable { connection.requestProjects() }
         .navigationDestination(for: String.self) { id in
             if let project = connection.projects.first(where: { $0.id == id }) { SessionListView(project: project) }
@@ -103,7 +100,6 @@ struct MobileHomeView: View {
 
     private var pairingPrompt: some View {
         VStack(spacing: 24) {
-            Text("AgentIDE").font(.largeTitle.bold())
             Image(systemName: "desktopcomputer").font(.system(size: 72)).foregroundStyle(.secondary)
             Text("No Mac paired").font(.title2.bold())
             Text("On your Mac, open AgentIDE and choose Pairing. Create a pairing code, then scan its QR code here.")

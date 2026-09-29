@@ -39,23 +39,63 @@ enum CredentialStore {
     }
 }
 
-struct QRScanner: UIViewControllerRepresentable {
+struct ScannerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var hasPreview = false
     let onCode: (String) -> Void
-    func makeUIViewController(context: Context) -> ScannerController { let controller = ScannerController(); controller.onCode = onCode; return controller }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            QRScanner(hasPreview: $hasPreview, onCode: onCode).ignoresSafeArea()
+            if !hasPreview {
+                ContentUnavailableView(
+                    "No Camera Preview",
+                    systemImage: "camera.fill",
+                    description: Text("This device is not showing a camera picture, so a pairing code cannot be scanned from here.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.systemBackground))
+            }
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 36)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .accessibilityLabel("Close")
+            .padding()
+        }
+    }
+}
+
+struct QRScanner: UIViewControllerRepresentable {
+    @Binding var hasPreview: Bool
+    let onCode: (String) -> Void
+    func makeUIViewController(context: Context) -> ScannerController {
+        let controller = ScannerController()
+        controller.onCode = onCode
+        controller.onPreviewChange = { hasPreview = $0 }
+        return controller
+    }
     func updateUIViewController(_ controller: ScannerController, context: Context) {}
 }
 
 final class ScannerController: UIViewController, @preconcurrency AVCaptureMetadataOutputObjectsDelegate {
     var onCode: ((String) -> Void)?
+    var onPreviewChange: ((Bool) -> Void)?
     private let session = AVCaptureSession()
     override func viewDidLoad() {
         super.viewDidLoad()
-        guard let camera = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: camera), session.canAddInput(input) else { return }
+        guard let camera = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: camera), session.canAddInput(input) else {
+            DispatchQueue.main.async { self.onPreviewChange?(false) }
+            return
+        }
         session.addInput(input)
         let output = AVCaptureMetadataOutput()
         guard session.canAddOutput(output) else { return }
         session.addOutput(output); output.setMetadataObjectsDelegate(self, queue: .main); output.metadataObjectTypes = [.qr]
         let preview = AVCaptureVideoPreviewLayer(session: session); preview.videoGravity = .resizeAspectFill; preview.frame = view.bounds; view.layer.addSublayer(preview)
+        DispatchQueue.main.async { self.onPreviewChange?(true) }
         DispatchQueue.global(qos: .userInitiated).async { self.session.startRunning() }
     }
     func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject], from connection: AVCaptureConnection) {

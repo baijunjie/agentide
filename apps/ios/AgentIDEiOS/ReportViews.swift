@@ -20,7 +20,9 @@ struct ReportBlock: View {
         VStack(alignment: .leading, spacing: 10) {
             Button { toggleExpanded(!expanded) } label: {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: icon).foregroundStyle(tint)
+                    Image(systemName: icon)
+                        .foregroundStyle(tint)
+                        .accessibilityIdentifier(reportIconIdentifier)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(event.title).font(.headline)
                         Text(event.summary).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.leading)
@@ -131,12 +133,17 @@ struct ReportBlock: View {
 
     private var icon: String {
         switch event.payload {
-        case .testReport: "checkmark.circle"
+        case let .testReport(report): report.failed == 0 ? "checkmark.circle" : "xmark.circle"
         case .plan: "list.number"
         case .todo: "checklist"
         case .diagnostics: "stethoscope"
         case .unknown: "doc.text"
         }
+    }
+
+    private var reportIconIdentifier: String {
+        if case let .testReport(report) = event.payload, report.failed > 0 { return "report-icon-failed" }
+        return "report-icon"
     }
 
     private var tint: Color {

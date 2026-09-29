@@ -20,9 +20,18 @@ enum DeviceIdentifierDisplay {
 }
 
 enum FileRowPresentation {
-    /// The root row's relative path repeats the name. A nested path still says where the file is.
+    /// Search results and the file header have no indent. A nested path is shown there; the tree uses indent and does not call this.
     static func subtitle(name: String, relativePath: String) -> String? {
         relativePath == name ? nil : relativePath
+    }
+}
+
+enum SourceLineLayout {
+    /// A line of words that is only a few screen widths wraps in the viewer. A much longer line stays intact so it can scroll sideways.
+    static let wrapLimit = 160
+
+    static func wraps(_ line: String) -> Bool {
+        line.unicodeScalars.count <= wrapLimit && line.unicodeScalars.contains { CharacterSet.whitespaces.contains($0) }
     }
 }
 

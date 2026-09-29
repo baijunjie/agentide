@@ -461,6 +461,20 @@ final class FileBrowserRecoveryStateTests: XCTestCase {
     }
 }
 
+final class SourceLineLayoutTests: XCTestCase {
+    func testWrapsAShortSentenceAndKeepsALongUnbrokenLine() {
+        let sentence = "This file is served by the deterministic simulator scenario."
+        XCTAssertTrue(SourceLineLayout.wraps(sentence))
+        XCTAssertFalse(SourceLineLayout.wraps(String(repeating: "M", count: 200)))
+        XCTAssertFalse(SourceLineLayout.wraps(String(repeating: "M", count: 10)))
+        let atLimit = String(repeating: "a", count: 159) + " "
+        XCTAssertEqual(atLimit.unicodeScalars.count, 160)
+        XCTAssertTrue(SourceLineLayout.wraps(atLimit))
+        XCTAssertFalse(SourceLineLayout.wraps(atLimit + "b"))
+        XCTAssertFalse(SourceLineLayout.wraps(""))
+    }
+}
+
 final class PathWrappingTests: XCTestCase {
     func testBreaksOnlyAfterSeparators() {
         XCTAssertEqual(PathWrapping.parts("Sources/App.swift:12:5"), ["Sources/", "App.swift", ":12", ":5"])

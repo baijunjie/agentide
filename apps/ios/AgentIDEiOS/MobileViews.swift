@@ -229,7 +229,16 @@ struct FileBrowserContent: View {
                 }
             }
 
-            if projectFileSearchQueryTrimmingWhiteSpace(searchQuery).isEmpty {
+            let trimmedQuery = projectFileSearchQueryTrimmingWhiteSpace(searchQuery)
+            let scalarCount = trimmedQuery.unicodeScalars.count
+            if scalarCount < 2 || scalarCount > 256 {
+                if scalarCount > 0 {
+                    Text(scalarCount < 2 ? "Enter at least two characters." : "Enter no more than 256 characters.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("file-search-hint")
+                }
                 searchHistory
                 fileTree
             } else {
@@ -305,12 +314,7 @@ struct FileBrowserContent: View {
 
     @ViewBuilder private var searchContent: some View {
         let query = projectFileSearchQueryTrimmingWhiteSpace(searchQuery)
-        let scalarCount = query.unicodeScalars.count
-        if scalarCount < 2 {
-            ContentUnavailableView("Keep Typing", systemImage: "character.cursor.ibeam", description: Text("Enter at least two characters."))
-        } else if scalarCount > 256 {
-            ContentUnavailableView("Search Too Long", systemImage: "character.cursor.ibeam", description: Text("Enter no more than 256 characters."))
-        } else if connection.isSearchingFiles(projectId: project.id) {
+        if connection.isSearchingFiles(projectId: project.id) {
             ProgressView("Searching…").frame(maxWidth: .infinity)
         } else if let error = connection.fileSearchError(projectId: project.id) {
             ContentUnavailableView {
@@ -615,9 +619,6 @@ private struct FileTreeRow: View {
             Image(systemName: icon).foregroundStyle(entry.type == .directory ? .blue : .secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name).foregroundStyle(.primary)
-                if let subtitle = FileRowPresentation.subtitle(name: entry.name, relativePath: entry.relativePath) {
-                    Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-                }
             }
             Spacer()
         }

@@ -285,7 +285,7 @@ final class MobileScenarioRuntime {
             let encoding = ((request["payload"] as? [String: Any])?["encoding"] as? String) ?? "utf8"
             let content = encoding == "base64"
                 ? "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
-                : "# Scenario workspace\n\nThis file is served by the deterministic simulator scenario.\n"
+                : "# Scenario workspace\n\nThis file is served by the deterministic simulator scenario.\n\(String(repeating: "M", count: 200))\n"
             return [success(for: request, type: "project.readFile.response", replyTo: requestId, payload: ["relativePath": path, "encoding": encoding, "content": content])]
         case "project.listImages":
             let path = ((request["payload"] as? [String: Any])?["relativePath"] as? String) ?? "assets/logo.png"

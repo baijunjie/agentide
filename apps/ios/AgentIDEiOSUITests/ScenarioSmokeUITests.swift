@@ -166,24 +166,69 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(sourceFile.waitForExistence(timeout: 5))
         sourceFile.tap()
 
-        // The whole file is one text element; a single source line is not its own accessibility element.
-        let body = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "# Scenario workspace")
-        ).firstMatch
-        XCTAssertTrue(body.waitForExistence(timeout: 5))
-        XCTAssertTrue(body.label.contains("This file is served by the deterministic simulator scenario."))
+        let sentence = app.staticTexts["source-line-3"]
+        XCTAssertTrue(sentence.waitForExistence(timeout: 5))
+        XCTAssertEqual(sentence.label, "This file is served by the deterministic simulator scenario.")
+        let window = app.windows.firstMatch.frame
+        XCTAssertGreaterThanOrEqual(sentence.frame.minX, window.minX - 1)
+        XCTAssertLessThanOrEqual(sentence.frame.maxX, window.maxX + 1, "sentence frame \(sentence.frame) outside \(window)")
         let navigationBottom = app.navigationBars.firstMatch.frame.maxY
-        XCTAssertGreaterThan(body.frame.minY, navigationBottom)
-        XCTAssertLessThan(body.frame.minY, navigationBottom + 120)
-        let lineNumbers = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "1\n")
-        ).firstMatch
-        XCTAssertTrue(lineNumbers.exists)
-        let lineNumberX = lineNumbers.frame.minX
-        let bodyX = body.frame.minX
-        body.swipeLeft()
-        XCTAssertEqual(lineNumbers.frame.minX, lineNumberX, accuracy: 1)
-        XCTAssertLessThan(body.frame.minX, bodyX - 8)
+        XCTAssertGreaterThan(sentence.frame.minY, navigationBottom)
+        XCTAssertLessThan(sentence.frame.minY, navigationBottom + 180)
+
+        let lineNumber = app.staticTexts["source-line-number-4"]
+        XCTAssertTrue(lineNumber.waitForExistence(timeout: 5))
+        let longLine = app.staticTexts["source-line-4"]
+        XCTAssertTrue(longLine.waitForExistence(timeout: 5))
+        XCTAssertEqual(longLine.label, String(repeating: "M", count: 200))
+        let lineNumberX = lineNumber.frame.minX
+        let before = longLine.frame.minX
+        let origin = longLine.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.5))
+        origin.withOffset(CGVector(dx: 160, dy: 0)).press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 20, dy: 0)))
+        XCTAssertEqual(lineNumber.frame.minX, lineNumberX, accuracy: 1)
+        XCTAssertLessThan(longLine.frame.minX, before - 8)
+    }
+
+    func testFileTreeShowsNamesAndKeepsTheTreeForAShortQuery() {
+        let app = launchFileBrowser(scenario: "comprehensive")
+        XCTAssertTrue(app.staticTexts["Sources"].waitForExistence(timeout: 5))
+        app.staticTexts["Sources"].tap()
+        let sourceFile = app.staticTexts["App.swift"]
+        XCTAssertTrue(sourceFile.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Sources/App.swift"].exists)
+        sourceFile.press(forDuration: 1)
+        XCTAssertTrue(app.buttons["Copy Relative Path"].waitForExistence(timeout: 3))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+
+        let search = app.textFields["file-search-field"]
+        search.tap()
+        search.typeText("App")
+        XCTAssertTrue(app.staticTexts["Sources/App.swift"].waitForExistence(timeout: 5))
+        app.buttons["Clear search"].tap()
+        XCTAssertTrue(app.staticTexts["README.md"].waitForExistence(timeout: 5))
+
+        search.tap()
+        search.typeText("A")
+        let hint = app.staticTexts["file-search-hint"]
+        XCTAssertTrue(hint.waitForExistence(timeout: 3))
+        XCTAssertEqual(hint.label, "Enter at least two characters.")
+        XCTAssertTrue(app.staticTexts["README.md"].exists)
+        XCTAssertTrue(app.staticTexts["Sources"].exists)
+        XCTAssertFalse(app.staticTexts["Keep Typing"].exists)
+        XCTAssertTrue(app.staticTexts["Recent Searches"].waitForExistence(timeout: 3))
+
+        app.buttons["Clear search"].tap()
+        UIPasteboard.general.string = String(repeating: "q", count: 257)
+        search.tap()
+        search.press(forDuration: 1.2)
+        let paste = app.menuItems["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 3))
+        paste.tap()
+        XCTAssertTrue(hint.waitForExistence(timeout: 3))
+        XCTAssertEqual(hint.label, "Enter no more than 256 characters.")
+        XCTAssertTrue(app.staticTexts["README.md"].exists)
+        XCTAssertFalse(app.staticTexts["Search Too Long"].exists)
+        XCTAssertFalse(app.staticTexts["Keep Typing"].exists)
     }
 
     func testSessionActivitySitsUnderTheNavigationBarInDarkMode() {

@@ -190,30 +190,54 @@ enum MarkdownRendering {
 
 private struct SourceContent: View {
     let content: String
-    private var lineNumbers: String {
-        let count = max(1, content.split(separator: "\n", omittingEmptySubsequences: false).count)
-        return (1...count).map(String.init).joined(separator: "\n")
+    private var lines: [String] {
+        let split = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        return split.isEmpty ? [""] : split
     }
     var body: some View {
-        // A bidirectional scroll view centers a short file. Line numbers stay outside the horizontal scroll so they remain while a long line moves.
-        ScrollView {
-            HStack(alignment: .top, spacing: 12) {
-                Text(lineNumbers)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.trailing)
-                Divider()
-                ScrollView(.horizontal) {
-                    Text(content.isEmpty ? " " : content)
-                        .textSelection(.enabled)
+        // 88 is the line number, rule, spacing, and padding. A sentence uses the remaining width; a longer line scrolls inside it and its number stays put.
+        GeometryReader { geo in
+            let textWidth = max(40, geo.size.width - 88)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                        HStack(alignment: .top, spacing: 12) {
+                            Text("\(index + 1)")
+                                .foregroundStyle(.tertiary)
+                                .frame(minWidth: 24, alignment: .trailing)
+                                .accessibilityIdentifier("source-line-number-\(index + 1)")
+                            Rectangle().fill(.quaternary).frame(width: 1)
+                            lineBody(line, width: textWidth, identifier: "source-line-\(index + 1)")
+                        }
+                    }
                 }
-                .scrollIndicators(.visible)
-                .defaultScrollAnchor(.leading)
+                .font(.system(size: 14, design: .monospaced))
+                .padding()
             }
-            .font(.system(size: 14, design: .monospaced))
-            .padding()
+            .defaultScrollAnchor(.top)
         }
-        .defaultScrollAnchor(.top)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder private func lineBody(_ line: String, width: CGFloat, identifier: String) -> some View {
+        let shown = line.isEmpty ? " " : line
+        if line.isEmpty || SourceLineLayout.wraps(line) {
+            Text(shown)
+                .frame(width: width, alignment: .leading)
+                .textSelection(.enabled)
+                .accessibilityIdentifier(identifier)
+        } else {
+            ScrollView(.horizontal) {
+                Text(shown)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier(identifier)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: width, alignment: .leading)
+            .defaultScrollAnchor(.leading)
+            .scrollIndicators(.visible)
+        }
     }
 }
 

@@ -8,3 +8,4 @@ dist/
 DerivedData/
 xcuserdata/
 *.xcuserstate
+.claude/settings.local.json

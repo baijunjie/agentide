@@ -200,7 +200,7 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(pendingQuestion.frame.minY, navigationBottom - 1)
         XCTAssertLessThan(pendingQuestion.frame.minY - navigationBottom, 20)
         XCTAssertTrue(app.staticTexts["Waiting for you"].exists)
-        XCTAssertTrue(app.staticTexts["Answer the question or approval before sending another message."].exists)
+        XCTAssertTrue(app.staticTexts["Answer the question or approval first."].exists)
     }
 
     func testProjectHomeAndPairingScanner() {
@@ -480,7 +480,7 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Waiting User"].exists)
         XCTAssertTrue(app.buttons["pending-question"].exists)
         XCTAssertTrue(app.buttons["pending-approval"].exists)
-        XCTAssertTrue(app.staticTexts["Answer the question or approval before sending another message."].exists)
+        XCTAssertTrue(app.staticTexts["Answer the question or approval first."].exists)
 
         app.buttons["session-browse-files"].tap()
         let readme = app.staticTexts["README.md"]
@@ -595,6 +595,88 @@ final class ScenarioSmokeUITests: XCTestCase {
         app.launchArguments = ["-mobileScenario", scenario]
         app.launch()
         return app
+    }
+
+    func testAccessibilityExtraLargeKeepsRowsActionsAndReportReadable() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-mobileScenario", "comprehensive",
+            "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXL",
+        ]
+        app.launch()
+
+        let project = app.staticTexts["Scenario Workspace"]
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(project.frame.width, project.frame.height, "project name frame \(project.frame)")
+        XCTAssertFalse(
+            app.images.allElementsBoundByIndex.contains { $0.frame.intersects(project.frame.insetBy(dx: 4, dy: 4)) },
+            "project name intersects an icon \(project.frame)"
+        )
+
+        project.tap()
+        let title = app.staticTexts["Scenario approval"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(title.frame.width, app.frame.width * 0.62, "session title frame \(title.frame)")
+        let badge = app.staticTexts["Waiting for you"]
+        XCTAssertTrue(badge.waitForExistence(timeout: 5))
+        XCTAssertFalse(title.frame.intersects(badge.frame), "title \(title.frame) intersects badge \(badge.frame)")
+
+        title.tap()
+        let window = app.windows.firstMatch.frame
+        for identifier in ["pending-question", "pending-approval"] {
+            let button = app.buttons[identifier]
+            XCTAssertTrue(button.waitForExistence(timeout: 5))
+            XCTAssertGreaterThanOrEqual(button.frame.minX, window.minX - 1, identifier)
+            XCTAssertLessThanOrEqual(button.frame.maxX, window.maxX + 1, "\(identifier) \(button.frame)")
+            XCTAssertGreaterThan(button.frame.width, 80, identifier)
+        }
+        let composer = app.textFields["session-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertEqual(composer.label, "Message the agent")
+        XCTAssertFalse(((composer.value as? String) ?? "").contains("Message the a"))
+        XCTAssertTrue(app.staticTexts["Answer the question or approval first."].exists)
+
+        let warnings = app.descendants(matching: .any)["report-diagnostics-warnings"]
+        let errors = app.descendants(matching: .any)["report-diagnostics-errors"]
+        XCTAssertTrue(makeHittable(warnings, in: app, moving: .later))
+        XCTAssertTrue(makeHittable(errors, in: app, moving: .later))
+        XCTAssertLessThan(warnings.frame.height, errors.frame.height + 8, "warnings \(warnings.frame) errors \(errors.frame) label \(warnings.label)")
+        XCTAssertFalse(warnings.label.contains("\n"))
+
+        let diagnostics = app.staticTexts["Diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 5))
+        let feed = app.scrollViews["session-feed"]
+        for _ in 0..<8 where !diagnostics.isHittable {
+            drag(feed, moving: .earlier)
+        }
+        XCTAssertTrue(diagnostics.isHittable, "diagnostics frame \(diagnostics.frame)")
+        diagnostics.tap()
+        let path = app.staticTexts["Sources/App.swift:12:5"]
+        XCTAssertTrue(path.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(path.frame.width, path.frame.height, "diagnostic path \(path.frame)")
+        let changedPath = app.staticTexts["Sources/App.swift"]
+        XCTAssertTrue(makeHittable(changedPath, in: app, moving: .later))
+        XCTAssertGreaterThan(changedPath.frame.width, changedPath.frame.height, "changed path \(changedPath.frame)")
+
+        let changed = app.buttons["file-changed-Sources/App.swift"]
+        XCTAssertTrue(scrollFullyAboveComposer(changed, in: app), "file card \(changed.frame) composer \(composer.frame)")
+    }
+
+    private func scrollFullyAboveComposer(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        let composer = app.textFields["session-composer"]
+        let feed = app.scrollViews["session-feed"]
+        let navigationBottom = app.navigationBars.firstMatch.frame.maxY
+        guard feed.waitForExistence(timeout: 2), composer.waitForExistence(timeout: 2) else { return false }
+        for _ in 0..<16 {
+            if element.exists,
+               element.frame.minY >= navigationBottom - 1,
+               element.frame.maxY <= composer.frame.minY + 1 {
+                return true
+            }
+            let direction: FeedDirection = element.exists && element.frame.maxY > composer.frame.minY ? .later : .earlier
+            drag(feed, moving: direction)
+        }
+        return false
     }
 
     private func openChanges(scenario: String) -> XCUIApplication {

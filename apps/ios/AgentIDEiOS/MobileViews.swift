@@ -4,6 +4,7 @@ import UIKit
 
 struct MobileHomeView: View {
     @EnvironmentObject private var connection: MobileConnection
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var scanning = false
     @State private var confirmingUnpair = false
     var body: some View {
@@ -56,16 +57,7 @@ struct MobileHomeView: View {
                     }
                     ForEach(connection.projects) { project in
                         NavigationLink(value: project.id) {
-                            HStack {
-                                Image(systemName: "folder.fill").foregroundStyle(.blue)
-                                VStack(alignment: .leading) {
-                                    Text(project.name)
-                                    Text(project.enabledAgents.map { $0.rawValue.capitalized }.joined(separator: " · "))
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                projectPresence(project)
-                            }
+                            projectRow(project)
                         }
                     }
                 }
@@ -85,6 +77,34 @@ struct MobileHomeView: View {
         .refreshable { connection.requestProjects() }
         .navigationDestination(for: String.self) { id in
             if let project = connection.projects.first(where: { $0.id == id }) { SessionListView(project: project) }
+        }
+    }
+
+    @ViewBuilder private func projectRow(_ project: RemoteProject) -> some View {
+        let agents = project.enabledAgents.map { $0.rawValue.capitalized }.joined(separator: " · ")
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(project.name)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: "folder.fill").foregroundStyle(.blue)
+                    Text(agents).font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    projectPresence(project)
+                }
+            }
+        } else {
+            HStack {
+                Image(systemName: "folder.fill").foregroundStyle(.blue)
+                VStack(alignment: .leading) {
+                    Text(project.name)
+                    Text(agents).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                projectPresence(project)
+            }
         }
     }
 

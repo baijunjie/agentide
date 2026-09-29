@@ -131,21 +131,45 @@ struct SessionListView: View {
 
 private struct SessionRow: View {
     @EnvironmentObject private var connection: MobileConnection
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let session: Session
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: session.agentType == .codex ? "terminal" : "sparkles")
-                .frame(width: 28, height: 28)
-                .foregroundStyle(session.agentType == .codex ? .blue : .purple)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(session.title).font(.headline).lineLimit(2)
-                Text(session.agentType.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(session.title)
+                    .font(.headline)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .center, spacing: 8) {
+                    agentIcon
+                    Text(agentName).font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    StatusBadge(status: connection.status(for: session)).fixedSize()
+                }
             }
-            Spacer()
-            StatusBadge(status: connection.status(for: session))
+            .contentShape(Rectangle())
+        } else {
+            HStack(spacing: 12) {
+                agentIcon
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(session.title).font(.headline).lineLimit(2)
+                    Text(agentName).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                StatusBadge(status: connection.status(for: session))
+            }
+            .contentShape(Rectangle())
         }
-        .contentShape(Rectangle())
+    }
+
+    private var agentName: String { session.agentType.rawValue.capitalized }
+
+    private var agentIcon: some View {
+        Image(systemName: session.agentType == .codex ? "terminal" : "sparkles")
+            .frame(width: 28, height: 28)
+            .foregroundStyle(session.agentType == .codex ? .blue : .purple)
     }
 }
 
@@ -208,6 +232,7 @@ private struct NewSessionView: View {
 
 private struct AgentSessionView: View {
     @EnvironmentObject private var connection: MobileConnection
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let project: RemoteProject
     let session: Session
     @State private var workspace = WorkspaceNavigationState()
@@ -319,21 +344,14 @@ private struct AgentSessionView: View {
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
                     if !pendingAttention.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(pendingAttention) { item in
-                                    Button {
-                                        proxy.scrollTo(item.id, anchor: .top)
-                                    } label: {
-                                        Label(item.label, systemImage: item.symbol)
-                                            .font(.subheadline.weight(.semibold))
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .accessibilityIdentifier(item.identifier)
-                                }
-                            }
-                            .padding(.horizontal)
-                            .padding(.vertical, 8)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { pendingButtons(scrollingWith: proxy) }
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
+                            VStack(alignment: .leading, spacing: 8) { pendingButtons(scrollingWith: proxy) }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal)
+                                .padding(.vertical, 8)
                         }
                         .background(.bar)
                         Divider()
@@ -369,6 +387,7 @@ private struct AgentSessionView: View {
                     }
                     .padding()
                 }
+                .contentMargins(.bottom, 24, for: .scrollContent)
                 .layoutPriority(1)
                 .accessibilityIdentifier("session-feed")
                 .onChange(of: events.last?.sequence) {
@@ -385,12 +404,13 @@ private struct AgentSessionView: View {
                     .foregroundStyle(.secondary)
             }
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("Message the agent", text: draftBinding, axis: .vertical)
+                TextField(dynamicTypeSize.isAccessibilitySize ? "" : "Message the agent", text: draftBinding, axis: .vertical)
                     .lineLimit(1...5)
                     // The feed already takes the leftover height. Letting this field do the same makes the stack renegotiate forever once activity grows.
                     .fixedSize(horizontal: false, vertical: true)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("session-composer")
+                    .accessibilityLabel("Message the agent")
                     .disabled(!canSend(status) || isSending)
                 if status == .running {
                     Button { connection.cancel(session: session) } label: { Image(systemName: "stop.fill") }
@@ -409,6 +429,20 @@ private struct AgentSessionView: View {
             .padding()
         }
         // The measured bar height is the safe area this stack already follows. Padding by it again leaves a blank band under the bar.
+    }
+
+    @ViewBuilder private func pendingButtons(scrollingWith proxy: ScrollViewProxy) -> some View {
+        ForEach(pendingAttention) { item in
+            Button {
+                proxy.scrollTo(item.id, anchor: .top)
+            } label: {
+                Label(item.label, systemImage: item.symbol)
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier(item.identifier)
+        }
     }
 
     private struct PendingAttention: Identifiable {
@@ -446,8 +480,8 @@ private struct AgentSessionView: View {
         switch status {
         case .idle: return nil
         case .starting: return "This session is still starting."
-        case .running: return "The agent is working. You can send when it is idle."
-        case .waitingUser: return "Answer the question or approval before sending another message."
+        case .running: return "You can send when it is idle."
+        case .waitingUser: return "Answer the question or approval first."
         case .completed: return "This session has ended."
         case .failed: return "This session failed."
         case .cancelled: return "This session was cancelled."
@@ -533,8 +567,14 @@ private struct FeedBlock: View {
             case let .status(value): NoticeBlock(icon: "circle.dotted", title: value.message ?? sessionStatusLabel(value.status), detail: nil, color: .secondary)
             case let .fileChanged(value):
                 Button { openChangedFile(value.relativePath) } label: {
-                    NoticeBlock(icon: "doc.badge.gearshape", title: value.relativePath, detail: "\(value.change.rawValue.capitalized) · View diff", color: .orange)
-                        .contentShape(Rectangle())
+                    NoticeBlock(
+                        icon: "doc.badge.gearshape",
+                        title: PathWrapping.display(value.relativePath),
+                        spokenTitle: value.relativePath,
+                        detail: "\(value.change.rawValue.capitalized) · View diff",
+                        color: .orange
+                    )
+                    .contentShape(Rectangle())
                 }
                 .accessibilityHint("View diff")
                 .buttonStyle(.plain)
@@ -706,13 +746,26 @@ private struct QuestionBlock: View {
 private struct NoticeBlock: View {
     let icon: String
     let title: String
+    var spokenTitle: String? = nil
     let detail: String?
     let color: Color
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon).foregroundStyle(color)
-            VStack(alignment: .leading, spacing: 2) { Text(title); if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) } }
-            Spacer()
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(spokenTitle ?? title)
+                if let detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(10)
         .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))

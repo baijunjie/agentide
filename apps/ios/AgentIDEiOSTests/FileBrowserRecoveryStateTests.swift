@@ -460,3 +460,18 @@ final class FileBrowserRecoveryStateTests: XCTestCase {
         ]))
     }
 }
+
+final class PathWrappingTests: XCTestCase {
+    func testBreaksOnlyAfterSeparators() {
+        XCTAssertEqual(PathWrapping.parts("Sources/App.swift:12:5"), ["Sources/", "App.swift", ":12", ":5"])
+        let wrapped = PathWrapping.display("Sources/App.swift:12:5")
+        let visible = wrapped.replacingOccurrences(of: "\u{2060}", with: "").replacingOccurrences(of: "\u{200B}", with: "")
+        XCTAssertEqual(visible, "Sources/App.swift:12:5")
+        XCTAssertTrue(wrapped.contains("/\u{200B}"))
+        XCTAssertTrue(wrapped.contains("\u{200B}:"))
+        XCTAssertFalse(wrapped.contains(":\u{200B}"))
+        XCTAssertTrue(wrapped.contains("S\u{2060}o"))
+        XCTAssertTrue(wrapped.contains("A\u{2060}p"))
+        XCTAssertFalse(wrapped.contains("Sources/App"))
+    }
+}

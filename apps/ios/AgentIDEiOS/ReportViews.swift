@@ -47,22 +47,22 @@ struct ReportBlock: View {
     @ViewBuilder private var summary: some View {
         switch event.payload {
         case let .testReport(report):
-            HStack(spacing: 8) {
-                metric("\(report.total)", "Total", .primary, identifier: "report-test-total")
-                metric("\(report.passed)", "Passed", .green, identifier: "report-test-passed")
-                metric("\(report.failed)", "Failed", report.failed == 0 ? .secondary : .red, identifier: "report-test-failed")
-                metric("\(report.skipped)", "Skipped", .secondary, identifier: "report-test-skipped")
-            }
+            MetricGroup(metrics: [
+                .init(id: "report-test-total", value: "\(report.total)", label: "Total", color: .primary),
+                .init(id: "report-test-passed", value: "\(report.passed)", label: "Passed", color: .green),
+                .init(id: "report-test-failed", value: "\(report.failed)", label: "Failed", color: report.failed == 0 ? .secondary : .red),
+                .init(id: "report-test-skipped", value: "\(report.skipped)", label: "Skipped", color: .secondary),
+            ])
         case let .plan(report):
             progressSummary(completed: report.steps.filter { $0.status == .completed }.count, total: report.steps.count)
         case let .todo(report):
             progressSummary(completed: report.items.filter { $0.status == .completed }.count, total: report.items.count)
         case let .diagnostics(report):
-            HStack(spacing: 12) {
-                metric("\(report.items.filter { $0.severity == .error }.count)", "Errors", .red, identifier: "report-diagnostics-errors")
-                metric("\(report.items.filter { $0.severity == .warning }.count)", "Warnings", .orange, identifier: "report-diagnostics-warnings")
-                metric("\(report.items.filter { $0.severity == .info }.count)", "Info", .blue, identifier: "report-diagnostics-info")
-            }
+            MetricGroup(metrics: [
+                .init(id: "report-diagnostics-errors", value: "\(report.items.filter { $0.severity == .error }.count)", label: "Errors", color: .red),
+                .init(id: "report-diagnostics-warnings", value: "\(report.items.filter { $0.severity == .warning }.count)", label: "Warnings", color: .orange),
+                .init(id: "report-diagnostics-info", value: "\(report.items.filter { $0.severity == .info }.count)", label: "Info", color: .blue),
+            ])
         case .unknown:
             EmptyView()
         }
@@ -156,16 +156,6 @@ struct ReportBlock: View {
         }
     }
 
-    private func metric(_ value: String, _ label: String, _ color: Color, identifier: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.headline.monospacedDigit()).foregroundStyle(color)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier(identifier)
-    }
-
     private func progressSummary(completed: Int, total: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(completed) of \(total) completed").font(.caption).foregroundStyle(.secondary)
@@ -182,10 +172,12 @@ struct ReportBlock: View {
     }
 
     private func diagnosticRow(_ item: DiagnosticReportItem) -> some View {
-        ReportRow(
+        let location = diagnosticLocation(item)
+        return ReportRow(
             icon: diagnosticIcon(item.severity),
             title: item.message,
-            detail: diagnosticLocation(item),
+            detail: location,
+            spokenDetail: location,
             color: diagnosticColor(item.severity)
         )
     }
@@ -237,20 +229,80 @@ struct ReportBlock: View {
     }
 }
 
+private struct MetricGroup: View {
+    struct Metric: Identifiable {
+        let id: String
+        let value: String
+        let label: String
+        let color: Color
+    }
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let metrics: [Metric]
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            stacked
+        } else {
+            ViewThatFits(in: .horizontal) {
+                spread
+                stacked
+            }
+        }
+    }
+
+    private var spread: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
+                if index > 0 { Spacer(minLength: 12) }
+                metricView(metric)
+            }
+        }
+    }
+
+    private var stacked: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(metrics) { metricView($0) }
+        }
+    }
+
+    private func metricView(_ metric: Metric) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(metric.value).font(.headline.monospacedDigit()).foregroundStyle(metric.color)
+            Text(metric.label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .fixedSize(horizontal: true, vertical: true)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(metric.id)
+    }
+}
+
 private struct ReportRow: View {
     let icon: String
     let title: String
     let detail: String?
+    var spokenDetail: String? = nil
     let color: Color
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: icon).foregroundStyle(color).frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).multilineTextAlignment(.leading)
-                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                Text(title).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                if let spokenDetail {
+                    WrappingPath(path: spokenDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
             }
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .contentShape(Rectangle())
     }

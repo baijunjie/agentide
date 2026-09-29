@@ -17,6 +17,94 @@ enum FileRowPresentation {
     }
 }
 
+enum PathWrapping {
+    /// `Sources/App.swift:12:5` becomes `Sources/`, `App.swift`, `:12`, `:5`. A line may break only between these parts.
+    static func parts(_ path: String) -> [String] {
+        var parts: [String] = []
+        var segment = ""
+        func flushBeforeColon() {
+            if !segment.isEmpty { parts.append(segment) }
+            segment = ":"
+        }
+        for character in path {
+            if character == "/" {
+                segment.append("/")
+                parts.append(segment)
+                segment = ""
+            } else if character == ":" {
+                flushBeforeColon()
+            } else {
+                segment.append(character)
+            }
+        }
+        if !segment.isEmpty { parts.append(segment) }
+        return parts
+    }
+
+    /// U+2060 keeps a part intact. U+200B sits after `/` and before `:`, which are the only break opportunities.
+    static func display(_ path: String) -> String {
+        parts(path).map { part in
+            part.map { String($0) }.joined(separator: "\u{2060}")
+        }.joined(separator: "\u{200B}")
+    }
+}
+
+struct WrappingPath: View {
+    let path: String
+
+    var body: some View {
+        PathSegmentLayout {
+            ForEach(Array(PathWrapping.parts(path).enumerated()), id: \.offset) { _, part in
+                Text(part).textSelection(.enabled)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(path)
+        .accessibilityAddTraits(.isStaticText)
+    }
+}
+
+private struct PathSegmentLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth > 0, rowWidth + size.width > maxWidth {
+                totalHeight += rowHeight
+                widest = max(widest, rowWidth)
+                rowWidth = 0
+                rowHeight = 0
+            }
+            rowWidth += size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+        totalHeight += rowHeight
+        widest = max(widest, rowWidth)
+        return CGSize(width: proposal.width == nil ? widest : min(maxWidth, widest), height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX + 0.5 {
+                x = bounds.minX
+                y += rowHeight
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: size.width, height: size.height))
+            x += size.width
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
 enum CredentialStore {
     static func token(for server: String) -> String? {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.agentide.relay", kSecAttrAccount as String: key(for: server), kSecReturnData as String: true]

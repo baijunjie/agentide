@@ -3,6 +3,20 @@ import Security
 import SwiftUI
 import UIKit
 
+enum MobileFailureCopy {
+    static func message(_ message: String, code: String? = nil) -> String {
+        let timedOut = code == "TIMEOUT" || message == "Request timed out"
+        return timedOut ? "\(message). You can try again." : message
+    }
+}
+
+enum FileRowPresentation {
+    /// The root row's relative path repeats the name. A nested path still says where the file is.
+    static func subtitle(name: String, relativePath: String) -> String? {
+        relativePath == name ? nil : relativePath
+    }
+}
+
 enum CredentialStore {
     static func token(for server: String) -> String? {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "dev.agentide.relay", kSecAttrAccount as String: key(for: server), kSecReturnData as String: true]

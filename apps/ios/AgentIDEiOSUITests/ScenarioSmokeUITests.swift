@@ -288,6 +288,142 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Dismiss"].exists)
     }
 
+    func testMobileExperienceWalkMatchesPlan() {
+        let failed = launch(scenario: "request-failure")
+        XCTAssertTrue(failed.navigationBars["Projects"].waitForExistence(timeout: 5))
+        XCTAssertTrue(failed.staticTexts["Scenario request failure"].waitForExistence(timeout: 5))
+        XCTAssertTrue(failed.buttons["Retry"].exists)
+        XCTAssertFalse(failed.staticTexts["No Projects"].exists)
+        XCTAssertFalse(failed.staticTexts["Mac Online"].exists)
+
+        let timedOut = launch(scenario: "timeout")
+        XCTAssertTrue(timedOut.staticTexts["Request timed out. You can try again."].waitForExistence(timeout: 20))
+        XCTAssertFalse(timedOut.staticTexts["No Projects"].exists)
+        XCTAssertFalse(timedOut.staticTexts["Mac Online"].exists)
+
+        let offline = launch(scenario: "offline")
+        XCTAssertTrue(offline.staticTexts["Mac Offline"].waitForExistence(timeout: 5))
+        XCTAssertTrue(offline.staticTexts["Projects appear when your Mac is online."].exists)
+        XCTAssertTrue(offline.staticTexts["scenario-ios"].exists)
+
+        let app = launch(scenario: "comprehensive")
+        XCTAssertTrue(app.staticTexts["Codex · Claude"].waitForExistence(timeout: 5))
+        let online = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Online")).firstMatch
+        XCTAssertTrue(online.waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        XCTAssertTrue(app.navigationBars["Scenario Workspace"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Scenario Works..."].exists)
+
+        app.buttons["Create session"].tap()
+        XCTAssertTrue(app.staticTexts["For example, fix the failing test"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Enter a task to create the session."].exists)
+        XCTAssertFalse(app.buttons["Create"].isEnabled)
+        app.buttons["Cancel"].tap()
+
+        app.staticTexts["Scenario approval"].tap()
+        XCTAssertTrue(app.navigationBars["Scenario approval"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Waiting for you"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Waiting User"].exists)
+        XCTAssertTrue(app.buttons["pending-question"].exists)
+        XCTAssertTrue(app.buttons["pending-approval"].exists)
+        XCTAssertTrue(app.staticTexts["Answer the question or approval before sending another message."].exists)
+
+        app.buttons["session-browse-files"].tap()
+        let readme = app.staticTexts["README.md"]
+        XCTAssertTrue(readme.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "README.md")).count, 1)
+        let search = app.textFields["file-search-field"]
+        XCTAssertEqual(search.placeholderValue, "Search files")
+        search.tap()
+        search.typeText("Ap")
+        XCTAssertTrue(app.staticTexts["App.swift"].waitForExistence(timeout: 5))
+        let spinnerGone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.activityIndicators.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [spinnerGone], timeout: 3), .completed)
+        app.buttons["Clear search"].tap()
+        app.staticTexts["Sources"].tap()
+        app.staticTexts["说明.md"].tap()
+        let markdown = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Scenario workspace")).firstMatch
+        XCTAssertTrue(markdown.waitForExistence(timeout: 5))
+        XCTAssertTrue(markdown.label.contains("This file"))
+        XCTAssertFalse(markdown.label.contains("workspaceThis"))
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.staticTexts["说明.md"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["session-browse-files"].exists)
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.buttons["session-browse-files"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Scenario approval"].exists)
+
+        app.buttons["session-changes"].tap()
+        XCTAssertTrue(app.staticTexts["Staged"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Unstaged"].exists)
+        let change = app.buttons["change-unstaged-Sources/App.swift"]
+        XCTAssertTrue(change.waitForExistence(timeout: 5))
+        change.tap()
+        let hunk = app.staticTexts["diff-hunk"]
+        XCTAssertTrue(hunk.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(hunk.frame.minX, 0)
+        XCTAssertLessThan(hunk.frame.minY, 360)
+        let gitLine = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "diff --git")).firstMatch
+        XCTAssertTrue(gitLine.exists)
+        XCTAssertTrue(gitLine.label.contains("b/Sources/App.swift"))
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.buttons["change-unstaged-Sources/App.swift"].waitForExistence(timeout: 5))
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.buttons["session-changes"].waitForExistence(timeout: 5))
+
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["Create session"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Projects"].waitForExistence(timeout: 5))
+        app.buttons["Unpair this iPhone"].firstMatch.tap()
+        let unpairSheet = app.sheets["Unpair this iPhone?"]
+        let unpairAlert = app.alerts["Unpair this iPhone?"]
+        if unpairSheet.waitForExistence(timeout: 5) {
+            unpairSheet.buttons["Unpair"].tap()
+        } else {
+            XCTAssertTrue(unpairAlert.waitForExistence(timeout: 2))
+            unpairAlert.buttons["Unpair"].tap()
+        }
+        XCTAssertTrue(app.staticTexts["No Mac paired"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["AgentIDE"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "choose Pairing")).firstMatch.exists)
+        XCTAssertTrue(app.buttons["Scan Pairing QR"].exists)
+
+        let notGit = openChanges(scenario: "not-git")
+        XCTAssertTrue(notGit.staticTexts["Not a Git Repository"].waitForExistence(timeout: 5))
+        XCTAssertFalse(notGit.staticTexts["No Changes"].exists)
+
+        let clean = openChanges(scenario: "clean")
+        XCTAssertTrue(clean.staticTexts["No Changes"].waitForExistence(timeout: 5))
+
+        let tooLarge = openChanges(scenario: "too-large")
+        tooLarge.buttons["change-unstaged-Sources/App.swift"].tap()
+        let retry = tooLarge.buttons["Request this diff again"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5))
+        let unavailable = tooLarge.staticTexts["Diff Unavailable"]
+        XCTAssertTrue(unavailable.exists)
+        XCTAssertLessThan(abs(retry.frame.midY - unavailable.frame.midY), 280)
+        let repeatedPath = tooLarge.staticTexts.matching(NSPredicate(format: "label == %@", "Sources/App.swift"))
+        XCTAssertLessThanOrEqual(repeatedPath.count, 1)
+    }
+
+    private func launch(scenario: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", scenario]
+        app.launch()
+        return app
+    }
+
+    private func openChanges(scenario: String) -> XCUIApplication {
+        let app = launch(scenario: scenario)
+        XCTAssertTrue(app.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        app.staticTexts["Scenario Workspace"].tap()
+        let changes = app.buttons["session-list-changes"]
+        XCTAssertTrue(changes.waitForExistence(timeout: 5))
+        changes.tap()
+        return app
+    }
+
     private func launchFileBrowser(scenario: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-mobileScenario", scenario]

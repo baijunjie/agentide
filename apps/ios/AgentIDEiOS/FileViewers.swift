@@ -86,15 +86,23 @@ struct TextFileViewer: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(selection.name).font(.headline)
-                Text(selection.relativePath).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            if let subtitle = FileRowPresentation.subtitle(name: selection.name, relativePath: selection.relativePath) {
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.vertical, 10)
+                Divider()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal).padding(.vertical, 10)
-            Divider()
             content
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.systemBackground))
+        .belowWorkspaceNavigationBar()
         .navigationTitle(selection.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -116,7 +124,7 @@ struct TextFileViewer: View {
             if selection.isMarkdown { MarkdownContent(content: file.content) }
             else { SourceContent(content: file.content) }
         } else if let error = connection.fileError(projectId: selection.projectId, path: selection.relativePath) {
-            unavailable(title: "File Unavailable", icon: "doc.questionmark", error: error) {
+            unavailable(title: "File Unavailable", icon: "doc.questionmark", error: MobileFailureCopy.message(error)) {
                 connection.requestFile(projectId: selection.projectId, relativePath: selection.relativePath, binary: false)
             }
         } else {
@@ -137,16 +145,46 @@ struct TextFileViewer: View {
 
 private struct MarkdownContent: View {
     let content: String
-    private var rendered: AttributedString {
-        (try? AttributedString(markdown: content)) ?? AttributedString(content)
-    }
     var body: some View {
         ScrollView {
-            Text(rendered)
+            Text(MarkdownRendering.attributed(content))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+enum MarkdownRendering {
+    /// SwiftUI Text draws markdown blocks without the newline that separated a heading from the next paragraph.
+    static func attributed(_ markdown: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+        guard let parsed = try? AttributedString(markdown: markdown, options: options) else {
+            return AttributedString(markdown)
+        }
+        var result = AttributedString()
+        var previousIdentity: Int?
+        for run in parsed.runs {
+            let identity = blockIdentity(run.presentationIntent)
+            if let identity, let previousIdentity, identity != previousIdentity {
+                result.append(AttributedString("\n\n"))
+            }
+            if let identity { previousIdentity = identity }
+            result.append(AttributedString(parsed[run.range]))
+        }
+        return result.characters.isEmpty ? AttributedString(markdown) : result
+    }
+
+    private static func blockIdentity(_ intent: PresentationIntent?) -> Int? {
+        intent?.components.first { component in
+            switch component.kind {
+            case .paragraph, .header, .codeBlock, .blockQuote, .thematicBreak, .listItem, .table:
+                true
+            default:
+                false
+            }
+        }?.identity
     }
 }
 
@@ -251,7 +289,7 @@ struct ImageViewer: View {
             ContentUnavailableView {
                 Label("Images Unavailable", systemImage: "photo.badge.exclamationmark")
             } description: {
-                Text(error)
+                Text(MobileFailureCopy.message(error))
             } actions: {
                 Button("Retry") {
                     connection.requestImages(projectId: selection.projectId, relativePath: selection.relativePath)
@@ -302,7 +340,7 @@ private struct ZoomableRemoteImage: View {
                 ContentUnavailableView {
                     Label("Image Unavailable", systemImage: "photo.badge.exclamationmark")
                 } description: {
-                    Text(error)
+                    Text(MobileFailureCopy.message(error))
                 } actions: {
                     Button("Retry") { connection.requestFile(projectId: projectId, relativePath: entry.relativePath, binary: true) }
                         .buttonStyle(.borderedProminent)

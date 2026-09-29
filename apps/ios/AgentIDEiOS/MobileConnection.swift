@@ -184,7 +184,10 @@ final class MobileConnection: ObservableObject {
     @Published var createdSession: Session?
     @Published private var imageRevision = 0
     @Published var error: String?
+    @Published var unpairFailure: String?
     private let deviceId: String
+    private var acceptingRelayMessages = false
+    var localDeviceId: String { deviceId }
     private let scenarioRuntime: MobileScenarioRuntime?
     private let fileSearchHistoryStore: FileSearchHistoryStore?
     private let requestTimeout: Duration
@@ -291,10 +294,108 @@ final class MobileConnection: ObservableObject {
             paired = scenarioRuntime.presence.paired
             online = scenarioRuntime.presence.online
             macDeviceId = scenarioRuntime.presence.macDeviceId
+            acceptingRelayMessages = true
             enqueueScenarioMessages(scenarioRuntime.start())
         } else if let server = UserDefaults.standard.string(forKey: "relayServer"), let token = CredentialStore.token(for: server) {
-            paired = true; connect(server: server, token: token)
+            paired = true
+            acceptingRelayMessages = true
+            connect(server: server, token: token)
         }
+    }
+
+    func revokeSelf() async {
+        if scenarioRuntime != nil {
+            dropPairing(server: nil)
+            return
+        }
+        guard let server = UserDefaults.standard.string(forKey: "relayServer"),
+              let token = CredentialStore.token(for: server),
+              let base = URL(string: server) else {
+            dropPairing(server: UserDefaults.standard.string(forKey: "relayServer"))
+            return
+        }
+        let encoded = deviceId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? deviceId
+        guard let url = URL(string: "/devices/\(encoded)", relativeTo: base) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(deviceId, forHTTPHeaderField: "X-Device-Id")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 204 else {
+                unpairFailure = "Could not unpair this iPhone."
+                return
+            }
+            dropPairing(server: server)
+        } catch {
+            unpairFailure = error.localizedDescription
+        }
+    }
+
+    private func dropPairing(server: String?) {
+        acceptingRelayMessages = false
+        recoveryPersistenceTask?.cancel()
+        let task = socket
+        socket = nil
+        task?.cancel()
+        for id in pendingTimeouts.keys { pendingTimeouts[id]?.cancel() }
+        pendingTimeouts.removeAll()
+        pendingRequests.removeAll()
+        if let server { CredentialStore.delete(for: server) }
+        UserDefaults.standard.removeObject(forKey: "relayServer")
+        paired = false
+        online = false
+        macDeviceId = nil
+        error = nil
+        unpairFailure = nil
+        projects = []
+        files = [:]
+        loadingPaths = []
+        fileContents = [:]
+        imageLists = [:]
+        loadingFiles = []
+        loadingImageLists = []
+        directoryErrors = [:]
+        fileErrors = [:]
+        imageListErrors = [:]
+        fileSearches = [:]
+        loadingSearchProjects = []
+        fileSearchErrors = [:]
+        projectChanges = [:]
+        loadingChanges = []
+        changesErrors = [:]
+        changesCompletions = [:]
+        diffs = [:]
+        loadingDiffs = []
+        diffErrors = [:]
+        sessions = [:]
+        sessionEvents = [:]
+        sessionFeedItems = [:]
+        eventSessionStatuses = [:]
+        historicallyResolvedInteractions = []
+        loadingSessionProjects = []
+        activeSessionOperations = []
+        subscribingSessions = []
+        respondingInteractions = []
+        submittedInteractions = []
+        resolvedInteractions = []
+        sessionErrors = [:]
+        sessionDrafts = [:]
+        expandedReportIds = [:]
+        createdSession = nil
+        pendingEventInteractions = [:]
+        pendingInteractionEvents = [:]
+        sessionProjects = [:]
+        subscribedSessionProjects = [:]
+        sessionEventSequences = [:]
+        workspaceNavigations = [:]
+        fileBrowserNavigations = [:]
+        draftRevisions = [:]
+        submittedDrafts = [:]
+        activeSessionId = nil
+        activeImageKeys = []
+        imageCache.removeAllObjects()
+        persistRecoveryState()
     }
 
     func claim(qrValue: String) async {
@@ -307,6 +408,7 @@ final class MobileConnection: ObservableObject {
             guard let http = response as? HTTPURLResponse, http.statusCode == 201 else { throw URLError(.userAuthenticationRequired) }
             let claim = try JSONDecoder().decode(Claim.self, from: data)
             UserDefaults.standard.set(payload.server, forKey: "relayServer"); CredentialStore.save(claim.token, for: payload.server); paired = true
+            acceptingRelayMessages = true
             connect(server: payload.server, token: claim.token)
         } catch { self.error = error.localizedDescription }
     }
@@ -669,16 +771,8 @@ final class MobileConnection: ObservableObject {
                 self.online = false
                 self.failAllPending(message: "Connection lost")
                 if task.closeCode.rawValue == 4003 {
-                    CredentialStore.delete(for: server); self.paired = false; self.projects = []; self.files = [:]
-                    self.fileContents = [:]; self.imageLists = [:]; self.sessions = [:]; self.sessionEvents = [:]
-                    self.sessionFeedItems = [:]; self.eventSessionStatuses = [:]; self.historicallyResolvedInteractions = []
-                    self.pendingEventInteractions = [:]; self.pendingInteractionEvents = [:]
-                    self.sessionProjects = [:]; self.subscribedSessionProjects = [:]; self.sessionEventSequences = [:]
-                    self.workspaceNavigations = [:]; self.fileBrowserNavigations = [:]; self.sessionDrafts = [:]
-                    self.draftRevisions = [:]; self.submittedDrafts = [:]
-                    self.submittedInteractions = []; self.resolvedInteractions = []
-                    self.persistRecoveryState()
-                    self.imageCache.removeAllObjects(); self.socket = nil; return
+                    self.dropPairing(server: server)
+                    return
                 }
                 try? await Task.sleep(for: .seconds(1)); guard self.socket === task else { return }; self.connect(server: server, token: token)
             }
@@ -686,6 +780,7 @@ final class MobileConnection: ObservableObject {
     }
 
     private func handle(_ data: Data) async {
+        guard acceptingRelayMessages else { return }
         guard let message = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let type = message["type"] as? String else { return }
         if type == "system.presence", let payload = message["payload"] as? [String: Any] {
             online = payload["online"] as? Bool ?? false
@@ -946,8 +1041,9 @@ final class MobileConnection: ObservableObject {
             }
         case let .diff(projectId, path, area, generation):
             let key = diffKey(projectId: projectId, path: path, area: area)
-            guard changesDiffLifecycle.isCurrent(projectId: projectId, generation: generation) else { return }
             loadingDiffs.remove(key)
+            // A newer changes refresh already owns this project. Keep the error off the stale response so the open diff can ask again.
+            guard changesDiffLifecycle.isCurrent(projectId: projectId, generation: generation) else { return }
             if let message { diffErrors[key] = .init(message: message, code: message == "Request timed out" ? "TIMEOUT" : "PROJECT_REQUEST_FAILED") }
         case let .sessionList(projectId):
             loadingSessionProjects.remove(projectId)

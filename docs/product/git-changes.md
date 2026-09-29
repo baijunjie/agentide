@@ -4,18 +4,18 @@ iPhone 可以只读审查 Mac 上已登记项目的当前 Git 工作树。Mac �
 
 ## Changes 列表
 
-- 用户可以从 Session List、文件浏览器或具体 Agent Session 打开 Changes。列表区分 `staged` 与 `unstaged`，并显示新增、修改、删除、重命名和未跟踪状态；重命名项同时显示原路径。
+- 用户可以从 Session List、文件浏览器或具体 Agent Session 打开 Changes。有变更的区域依次按 `Staged`、`Unstaged` 分组，并显示新增、修改、删除、重命名和未跟踪状态；重命名项同时显示原路径。
 - 同一路径可以分别出现 staged 与 unstaged 记录。记录还可包含变更前后大小；二进制项明确标记为 Binary。
 - 下拉刷新或工具栏刷新会重新读取当前工作树。刷新结果只代表查询时刻的状态，不是仓库快照。
-- 非 Git 项目显示独立的空状态；Git 工作树没有变更时显示 clean 空状态。两者都不是请求失败。
+- 不是 Git 仓库时标题是 `Not a Git Repository`；干净工作区的标题是 `No Changes`。两者都不是请求失败。
 
-从具体 Agent Session 进入时，会话、Changes 与 Diff 组成三层工作区；逐层返回时先从 Diff 回到 Changes，再回到会话。该层级与当前 Diff 选择会随最近会话的工作区状态一起恢复。
+从具体 Agent Session 进入时，Changes 与 Diff 使用同一套空间层；返回规则见 [项目登记与文件浏览](project-files.md#文件浏览交互)。逐层返回时先从 Diff 回到 Changes，再回到会话。该层级与当前 Diff 选择会随最近会话的工作区状态一起恢复。
 
-Activity Feed 中的 `file.changed` 块可以直接打开对应路径：客户端先刷新 Changes；当前仍存在该路径的变更时进入其 Diff，文件已经恢复干净时停留在最新的 Changes 状态，不保留事件产生时的旧内容。
+Activity Feed 中的 `file.changed` 卡片标明可以查看 diff，并可以直接打开对应路径：客户端先刷新 Changes；当前仍存在该路径的变更时进入其 Diff，文件已经恢复干净时停留在最新的 Changes 状态，不保留事件产生时的旧内容。
 
 ## Diff Viewer
 
-文本变更以统一 diff 显示。文件头和 hunk 原样保留；hunk 内同时显示旧文件与新文件行号，新增行和删除行使用不同颜色。内容可以横向和纵向滚动。
+文本变更以统一 diff 显示。文件头和 hunk 原样保留；hunk 内同时显示旧文件与新文件行号，新增行和删除行使用不同颜色。着色行从顶部对齐，内容可以横向和纵向滚动。当前路径只出现在导航标题，不在内容里再写一遍。
 
 未跟踪文本文件以整文件新增的统一 diff 展示。二进制文件不传输原始内容或文本 diff，Viewer 只显示 Binary 状态和可用的变更前后大小。Diff 是一次只读查询的结果；文件继续变化时不保证已打开的内容同步更新。
 
@@ -23,7 +23,7 @@ Activity Feed 中的 `file.changed` 块可以直接打开对应路径：客户�
 
 iPhone 使用 `project.listChanges` 请求当前变更，使用项目内相对路径和 `staged` / `unstaged` 区域发送 `project.readDiff`。Mac 分别以同名 `.response` 消息返回 [Git Changes/Diff 共享对象](protocol.md#共享业务对象)。
 
-客户端只接受来自当前 Mac、`replyTo` 匹配原请求、项目一致的响应；Diff 响应还必须与请求的路径和区域一致。每次 Changes 刷新都会进入新的请求代次，较旧的 Changes 或 Diff 响应不能覆盖新结果。离线、发送失败、超时、无效响应和 Mac 返回的查询错误都结束当前加载状态；独立 Changes 页面和 Diff Viewer 为可重试错误提供 Retry。
+客户端只接受来自当前 Mac、`replyTo` 匹配原请求、项目一致的响应；Diff 响应还必须与请求的路径和区域一致。每次 Changes 刷新都会进入新的请求代次，较旧的 Changes 或 Diff 响应不能覆盖新结果。离线、发送失败、超时、无效响应和 Mac 返回的查询错误都结束当前加载状态。打不开变更列表或 diff 时，失败说明和重试放在一起。一般错误的按钮是 Retry。diff 超限（`DIFF_TOO_LARGE`）的按钮是 `Request this diff again`；说明写明再试一次发出的是同一个请求，diff 仍超限。
 
 ## 只读与仓库边界
 

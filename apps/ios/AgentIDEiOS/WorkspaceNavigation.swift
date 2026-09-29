@@ -103,19 +103,22 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
 
                 browserContent()
                     .frame(width: width - inactiveInset)
-                    .workspaceLayer(browserStyle(depth: depth, width: width, inactiveInset: inactiveInset))
+                    .background(Color(.systemBackground))
+                    .workspaceLayer(sideStyle(.browser, depth: depth, width: width, inactiveInset: inactiveInset))
                     .allowsHitTesting(navigation.level == .browser)
                     .accessibilityHidden(navigation.level != .browser)
 
                 changesContent()
                     .frame(width: width - inactiveInset)
-                    .workspaceLayer(browserStyle(depth: depth, width: width, inactiveInset: inactiveInset))
+                    .background(Color(.systemBackground))
+                    .workspaceLayer(sideStyle(.changes, depth: depth, width: width, inactiveInset: inactiveInset))
                     .allowsHitTesting(navigation.level == .changes)
                     .accessibilityHidden(navigation.level != .changes)
 
                 if let selection = navigation.presentedFile {
                     fileContent(selection)
                         .frame(width: width - inactiveInset)
+                        .background(Color(.systemBackground))
                         .workspaceLayer(fileStyle(depth: depth, width: width, inactiveInset: inactiveInset))
                         .allowsHitTesting(navigation.level == .file(selection))
                         .accessibilityHidden(navigation.level != .file(selection))
@@ -123,6 +126,7 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
                 if let change = navigation.presentedChange {
                     diffContent(change)
                         .frame(width: width - inactiveInset)
+                        .background(Color(.systemBackground))
                         .workspaceLayer(fileStyle(depth: depth, width: width, inactiveInset: inactiveInset))
                         .allowsHitTesting(navigation.level == .diff(change))
                         .accessibilityHidden(navigation.level != .diff(change))
@@ -132,6 +136,7 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
                 fileReturnHandle(width: width)
             }
             .frame(width: width, height: geometry.size.height, alignment: .leading)
+            .environment(\.workspaceNavigationInset, navigationInset)
             .clipped()
             .contentShape(Rectangle())
             .simultaneousGesture(
@@ -199,11 +204,11 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
 
     @ViewBuilder private func fileReturnHandle(width: CGFloat) -> some View {
         if navigation.level.depth == 2 {
-            Image(systemName: "chevron.left")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            // A chevron here reads as a second Back button, but a tap does not navigate.
+            Capsule()
+                .fill(Color.secondary)
+                .frame(width: 4, height: 28)
                 .frame(width: 44, height: 44)
-                .background(.thinMaterial, in: Circle())
                 .contentShape(Rectangle())
                 .gesture(fileReturnGesture(width: width))
                 .accessibilityHidden(true)
@@ -283,6 +288,24 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
             shadow: 0,
             zIndex: 0
         )
+    }
+
+    private enum SidePanel { case browser, changes }
+
+    /// Files and changes share one depth. Giving both the active style paints the hidden panel's spinner over the visible one.
+    private func sideStyle(_ panel: SidePanel, depth: CGFloat, width: CGFloat, inactiveInset: CGFloat) -> WorkspaceLayerStyle {
+        guard sidePanelIsActive(panel) else {
+            return WorkspaceLayerStyle(offset: width, scale: 1, blur: 0, opacity: 0, shadow: 0, zIndex: 1)
+        }
+        return browserStyle(depth: depth, width: width, inactiveInset: inactiveInset)
+    }
+
+    private func sidePanelIsActive(_ panel: SidePanel) -> Bool {
+        switch navigation.level {
+        case .browser, .file: panel == .browser
+        case .changes, .diff: panel == .changes
+        case .session: panel == .browser
+        }
     }
 
     private func browserStyle(depth: CGFloat, width: CGFloat, inactiveInset: CGFloat) -> WorkspaceLayerStyle {
@@ -402,6 +425,34 @@ private final class NavigationClearanceView: UIView {
     }
 }
 
+struct WorkspaceNavigationInsetKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    var workspaceNavigationInset: CGFloat {
+        get { self[WorkspaceNavigationInsetKey.self] }
+        set { self[WorkspaceNavigationInsetKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// The workspace is laid out from the window origin. Lists already follow the safe area; plain pages need this inset or their header sits under the bar.
+    func belowWorkspaceNavigationBar() -> some View {
+        modifier(WorkspaceNavigationBarInset())
+    }
+}
+
+private struct WorkspaceNavigationBarInset: ViewModifier {
+    @Environment(\.workspaceNavigationInset) private var navigationInset
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.top, navigationInset)
+            .ignoresSafeArea(edges: navigationInset > 0 ? .top : [])
+    }
+}
+
 private struct WorkspaceLayerStyle {
     let offset: CGFloat
     let scale: CGFloat
@@ -409,6 +460,37 @@ private struct WorkspaceLayerStyle {
     let opacity: CGFloat
     let shadow: CGFloat
     let zIndex: Double
+}
+
+struct NavigationPopGuard: UIViewControllerRepresentable {
+    var enabled: Bool
+
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.enabled = enabled
+        controller.sync()
+    }
+
+    static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
+        controller.navigationController?.interactivePopGestureRecognizer?.isEnabled = true
+    }
+
+    final class Controller: UIViewController {
+        var enabled = true
+
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            sync()
+        }
+
+        func sync() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.navigationController?.interactivePopGestureRecognizer?.isEnabled = self.enabled
+            }
+        }
+    }
 }
 
 private extension View {

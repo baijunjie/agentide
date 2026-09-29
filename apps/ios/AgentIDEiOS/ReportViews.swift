@@ -35,7 +35,7 @@ struct ReportBlock: View {
             .accessibilityIdentifier("report-\(event.kind)")
 
             summary
-            if expanded { details }
+            if expanded { expandedDetails }
         }
         .padding(12)
         .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
@@ -62,8 +62,27 @@ struct ReportBlock: View {
                 metric("\(report.items.filter { $0.severity == .info }.count)", "Info", .blue, identifier: "report-diagnostics-info")
             }
         case .unknown:
-            Label("Report \(event.kind)", systemImage: "doc.text.magnifyingglass")
-                .font(.caption).foregroundStyle(.secondary)
+            EmptyView()
+        }
+    }
+
+    private var detailCount: Int {
+        switch event.payload {
+        case let .testReport(report): report.failures.count
+        case let .plan(report): report.steps.count
+        case let .todo(report): report.items.count
+        case let .diagnostics(report): report.items.count
+        case .unknown: 1
+        }
+    }
+
+    @ViewBuilder private var expandedDetails: some View {
+        // The feed is already a scroll view, so this list only scrolls once it has a fixed height.
+        if detailCount > 8 {
+            ScrollView { details }
+                .frame(height: 320)
+        } else {
+            details
         }
     }
 

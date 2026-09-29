@@ -93,7 +93,15 @@ struct SessionListView: View {
             }
         }
         .navigationTitle(project.name)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(project.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .accessibilityAddTraits(.isHeader)
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 NavigationLink { FileBrowserView(project: project) } label: { Image(systemName: "folder") }
                     .accessibilityLabel("Browse files")
@@ -162,9 +170,24 @@ private struct NewSessionView: View {
                     }
                 }
                 Section("Initial Task") {
-                    TextEditor(text: $initialTask)
-                        .accessibilityLabel("Initial task")
-                        .frame(minHeight: 160)
+                    ZStack(alignment: .topLeading) {
+                        if initialTask.isEmpty {
+                            Text("For example, fix the failing test")
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 8)
+                                .padding(.leading, 5)
+                                .allowsHitTesting(false)
+                        }
+                        TextEditor(text: $initialTask)
+                            .scrollContentBackground(.hidden)
+                            .accessibilityLabel("Initial task")
+                            .frame(minHeight: 160)
+                    }
+                    if initialTask.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Enter a task to create the session.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 if let error = connection.sessionErrors[project.id] {
                     Text(error).foregroundStyle(.red)
@@ -221,6 +244,7 @@ private struct AgentSessionView: View {
             TextFileViewer(selection: selection, sendToAgent: addReferenceToDraft)
         } changesContent: {
             ChangesWorkspaceContent(project: project) { change in
+                connection.requestDiff(projectId: project.id, change: change)
                 workspace.prepareDiff(change)
                 Task { @MainActor in
                     await Task.yield()
@@ -234,9 +258,18 @@ private struct AgentSessionView: View {
         }
         .navigationTitle(workspaceTitle)
         .navigationBarTitleDisplayMode(.inline)
+        // The system back item pops this whole session. Spatial levels have to take that button over.
+        .navigationBarBackButtonHidden(workspace.level != .session)
+        .background(NavigationPopGuard(enabled: workspace.level == .session))
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                HStack {
+            if workspace.level != .session {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { retreatOneLevel() } label: { Image(systemName: "chevron.backward") }
+                        .accessibilityLabel("Back")
+                }
+            }
+            if workspace.level == .session {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
                             workspace.showBrowser()
@@ -244,7 +277,6 @@ private struct AgentSessionView: View {
                     } label: { Image(systemName: "folder") }
                     .accessibilityLabel("Browse files")
                     .accessibilityIdentifier("session-browse-files")
-                    .disabled(workspace.level != .session)
                     Button {
                         withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) {
                             workspace.showChanges()
@@ -253,11 +285,7 @@ private struct AgentSessionView: View {
                     } label: { Image(systemName: "arrow.triangle.branch") }
                         .accessibilityLabel("Changes")
                         .accessibilityIdentifier("session-changes")
-                        .disabled(workspace.level != .session)
                 }
-            }
-            if workspace.level == .session {
-                ToolbarItem(placement: .principal) { StatusBadge(status: status) }
             }
         }
         .fullScreenCover(item: $workspace.fullScreenImage) {
@@ -289,11 +317,31 @@ private struct AgentSessionView: View {
     private func sessionContent(topClearance: CGFloat) -> some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    if !pendingAttention.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(pendingAttention) { item in
+                                    Button {
+                                        proxy.scrollTo(item.id, anchor: .top)
+                                    } label: {
+                                        Label(item.label, systemImage: item.symbol)
+                                            .font(.subheadline.weight(.semibold))
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .accessibilityIdentifier(item.identifier)
+                                }
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 8)
+                        }
+                        .background(.bar)
+                        Divider()
+                    }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
-                        Color.clear
-                            .frame(height: topClearance)
-                            .accessibilityHidden(true)
+                        StatusBadge(status: status)
+                            .accessibilityIdentifier("session-status")
                         if events.isEmpty {
                             if connection.subscribingSessions.contains(session.id) {
                                 ProgressView("Loading activity…").frame(maxWidth: .infinity).padding(.top, 40)
@@ -325,8 +373,15 @@ private struct AgentSessionView: View {
                     guard let id = connection.sessionFeedItems[session.id]?.last?.id else { return }
                     proxy.scrollTo(id, anchor: .bottom)
                 }
+                }
             }
             Divider()
+            VStack(alignment: .leading, spacing: 6) {
+            if let sendBlockedReason {
+                Text(sendBlockedReason)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             HStack(alignment: .bottom, spacing: 10) {
                 TextField("Message the agent", text: draftBinding, axis: .vertical)
                     .lineLimit(1...5)
@@ -346,7 +401,61 @@ private struct AgentSessionView: View {
                     .accessibilityLabel("Send message")
                 }
             }
+            }
             .padding()
+        }
+        .padding(.top, topClearance)
+    }
+
+    private struct PendingAttention: Identifiable {
+        let id: String
+        let label: String
+        let symbol: String
+        let identifier: String
+    }
+
+    private var pendingAttention: [PendingAttention] {
+        (connection.sessionFeedItems[session.id] ?? []).compactMap { item in
+            guard case let .event(event) = item.content else { return nil }
+            switch event {
+            case let .questionRequested(value):
+                guard interactionNeedsAttention(value.interactionId) else { return nil }
+                return PendingAttention(id: item.id, label: "Answer question", symbol: "questionmark.bubble", identifier: "pending-question")
+            case let .approvalRequested(value):
+                guard interactionNeedsAttention(value.interactionId) else { return nil }
+                return PendingAttention(id: item.id, label: "Review approval", symbol: "checkmark.shield", identifier: "pending-approval")
+            default:
+                return nil
+            }
+        }
+    }
+
+    private func interactionNeedsAttention(_ interactionId: String) -> Bool {
+        !connection.isHistoricallyResolved(sessionId: session.id, interactionId: interactionId)
+            && !connection.isSubmitted(sessionId: session.id, interactionId: interactionId)
+            && !connection.isResolved(sessionId: session.id, interactionId: interactionId)
+            && !connection.isResponding(sessionId: session.id, interactionId: interactionId)
+    }
+
+    private var sendBlockedReason: String? {
+        if !connection.online { return "Mac is offline." }
+        switch status {
+        case .idle: return nil
+        case .starting: return "This session is still starting."
+        case .running: return "The agent is working. You can send when it is idle."
+        case .waitingUser: return "Answer the question or approval before sending another message."
+        case .completed: return "This session has ended."
+        case .failed: return "This session failed."
+        case .cancelled: return "This session was cancelled."
+        }
+    }
+
+    private func retreatOneLevel() {
+        let leavesFile = workspace.level.depth == 2
+        withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86), completionCriteria: .logicallyComplete) {
+            workspace.goBack()
+        } completion: {
+            if leavesFile { workspace.finishFileDismissal() }
         }
     }
 
@@ -391,6 +500,7 @@ private struct AgentSessionView: View {
             response: connection.changes(projectId: project.id)
         ) else { return }
         workspace.showChanges()
+        connection.requestDiff(projectId: project.id, change: change)
         workspace.prepareDiff(change)
         withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.86)) { workspace.activatePreparedDiff() }
     }
@@ -416,12 +526,13 @@ private struct FeedBlock: View {
             case let .approvalRequested(value): ApprovalBlock(event: value, session: session, historicallyResolved: connection.isHistoricallyResolved(sessionId: session.id, interactionId: value.interactionId))
             case let .questionRequested(value): QuestionBlock(event: value, session: session, historicallyResolved: connection.isHistoricallyResolved(sessionId: session.id, interactionId: value.interactionId))
             case let .error(value): NoticeBlock(icon: "exclamationmark.triangle.fill", title: value.message, detail: value.code, color: .red)
-            case let .status(value): NoticeBlock(icon: "circle.dotted", title: value.message ?? value.status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized, detail: nil, color: .secondary)
+            case let .status(value): NoticeBlock(icon: "circle.dotted", title: value.message ?? sessionStatusLabel(value.status), detail: nil, color: .secondary)
             case let .fileChanged(value):
                 Button { openChangedFile(value.relativePath) } label: {
-                    NoticeBlock(icon: "doc.badge.gearshape", title: value.relativePath, detail: value.change.rawValue.capitalized, color: .orange)
+                    NoticeBlock(icon: "doc.badge.gearshape", title: value.relativePath, detail: "\(value.change.rawValue.capitalized) · View diff", color: .orange)
                         .contentShape(Rectangle())
                 }
+                .accessibilityHint("View diff")
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("file-changed-\(value.relativePath)")
             case let .report(value):
@@ -534,6 +645,13 @@ private struct QuestionBlock: View {
     @State private var freeText = ""
     @FocusState private var freeTextFocused: Bool
     private var inactive: Bool { historicallyResolved || connection.isResponding(sessionId: session.id, interactionId: event.interactionId) || connection.isSubmitted(sessionId: session.id, interactionId: event.interactionId) || connection.isResolved(sessionId: session.id, interactionId: event.interactionId) }
+    private var needsAnswer: Bool { selected.isEmpty && freeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var submitHint: String {
+        let hasOptions = !(event.options ?? []).isEmpty
+        if hasOptions && event.allowFreeText { return "Select one or more options, or write an answer, to submit." }
+        if hasOptions { return "Select one or more options to submit." }
+        return "Write an answer to submit."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -543,7 +661,7 @@ private struct QuestionBlock: View {
                     if selected.contains(option.id) { selected.remove(option.id) } else { selected.insert(option.id) }
                 } label: {
                     HStack(alignment: .top) {
-                        Image(systemName: selected.contains(option.id) ? "checkmark.circle.fill" : "circle")
+                        Image(systemName: selected.contains(option.id) ? "checkmark.square.fill" : "square")
                         VStack(alignment: .leading) { Text(option.label); if let description = option.description { Text(description).font(.caption).foregroundStyle(.secondary) } }
                         Spacer()
                     }
@@ -551,6 +669,7 @@ private struct QuestionBlock: View {
                 .buttonStyle(.plain)
                 .disabled(inactive)
                 .accessibilityIdentifier("question-option-\(option.id)")
+                .accessibilityHint("Selects more than one option")
             }
             if event.allowFreeText {
                 TextField("Your answer", text: $freeText, axis: .vertical)
@@ -563,8 +682,13 @@ private struct QuestionBlock: View {
                 connection.respondToQuestion(session: session, interactionId: event.interactionId, optionIds: Array(selected), freeText: freeText)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(inactive || (selected.isEmpty && freeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+            .disabled(inactive || needsAnswer)
             .accessibilityIdentifier("question-submit-\(event.interactionId)")
+            if !inactive && needsAnswer {
+                Text(submitHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if historicallyResolved || connection.isResolved(sessionId: session.id, interactionId: event.interactionId) { Label("Responded", systemImage: "checkmark").font(.caption).foregroundStyle(.secondary) }
             else if connection.isSubmitted(sessionId: session.id, interactionId: event.interactionId) { Label("Response submitted", systemImage: "clock").font(.caption).foregroundStyle(.secondary) }
         }
@@ -592,7 +716,7 @@ private struct NoticeBlock: View {
 private struct StatusBadge: View {
     let status: SessionStatus
     var body: some View {
-        Text(status.rawValue.replacingOccurrences(of: "_", with: " ").capitalized)
+        Text(sessionStatusLabel(status))
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 8).padding(.vertical, 4)
             .foregroundStyle(statusColor(status))
@@ -638,6 +762,26 @@ func appendFeedEvent(_ event: AgentEvent, to items: inout [FeedItem]) {
 }
 
 private func canSend(_ status: SessionStatus) -> Bool { status == .idle }
+
+func sessionStatusLabel(_ status: SessionStatus) -> String {
+    switch status {
+    case .starting: "Starting"
+    case .running: "Running"
+    case .idle: "Idle"
+    case .waitingUser: "Waiting for you"
+    case .completed: "Completed"
+    case .failed: "Failed"
+    case .cancelled: "Cancelled"
+    }
+}
+
+func sessionStatusLabel(_ status: StatusEvent.Status) -> String {
+    switch status {
+    case .running: "Running"
+    case .idle: "Idle"
+    case .waitingUser: "Waiting for you"
+    }
+}
 
 private func statusColor(_ status: SessionStatus) -> Color {
     switch status {

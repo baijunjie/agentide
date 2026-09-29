@@ -5,49 +5,117 @@ import UIKit
 struct MobileHomeView: View {
     @EnvironmentObject private var connection: MobileConnection
     @State private var scanning = false
+    @State private var confirmingUnpair = false
     var body: some View {
         NavigationStack {
             if connection.paired { projectList } else { pairingPrompt }
         }
-        .navigationTitle("AgentIDE")
         .sheet(isPresented: $scanning) {
             QRScanner { value in scanning = false; Task { await connection.claim(qrValue: value) } }.ignoresSafeArea()
         }
+        .confirmationDialog("Unpair this iPhone?", isPresented: $confirmingUnpair, titleVisibility: .visible) {
+            Button("Unpair", role: .destructive) { Task { await connection.revokeSelf() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This phone will need a new pairing code from AgentIDE on your Mac.")
+        }
+        .alert("Could not unpair this iPhone", isPresented: unpairFailurePresented) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(connection.unpairFailure ?? "")
+        }
     }
+    private var unpairFailurePresented: Binding<Bool> {
+        Binding(
+            get: { connection.unpairFailure != nil },
+            set: { if !$0 { connection.unpairFailure = nil } }
+        )
+    }
+
     private var projectList: some View {
         List {
-            Section {
-                Label(connection.online ? "Mac Online" : "Mac Offline", systemImage: connection.online ? "desktopcomputer.and.macbook" : "desktopcomputer")
-                    .foregroundStyle(connection.online ? .green : .secondary)
-            }
-            Section("Projects") {
-                if connection.projects.isEmpty {
-                    ContentUnavailableView("No Projects", systemImage: "folder", description: Text(connection.online ? "Add a project on your Mac." : "Projects appear when your Mac is online."))
+            if connection.online, let error = connection.error {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(MobileFailureCopy.message(error)).foregroundStyle(.red)
+                        Button("Retry") { connection.requestProjects() }
+                    }
                 }
-                ForEach(connection.projects) { project in
-                    NavigationLink(value: project.id) {
-                        HStack {
-                            Image(systemName: "folder.fill").foregroundStyle(.blue)
-                            VStack(alignment: .leading) { Text(project.name); Text(project.enabledAgents.map(\.rawValue).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
-                            Spacer(); Circle().fill(project.online && connection.online ? .green : .gray).frame(width: 8, height: 8)
+            } else {
+                Section {
+                    Label(connection.online ? "Mac Online" : "Mac Offline", systemImage: connection.online ? "desktopcomputer.and.macbook" : "desktopcomputer")
+                        .foregroundStyle(connection.online ? .green : .secondary)
+                        .accessibilityLabel(connection.online ? "Mac Online" : "Mac Offline")
+                }
+                Section("Projects") {
+                    if connection.projects.isEmpty {
+                        ContentUnavailableView("No Projects", systemImage: "folder", description: Text(connection.online ? "Add a project on your Mac." : "Projects appear when your Mac is online."))
+                    }
+                    ForEach(connection.projects) { project in
+                        NavigationLink(value: project.id) {
+                            HStack {
+                                Image(systemName: "folder.fill").foregroundStyle(.blue)
+                                VStack(alignment: .leading) {
+                                    Text(project.name)
+                                    Text(project.enabledAgents.map { $0.rawValue.capitalized }.joined(separator: " · "))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                projectPresence(project)
+                            }
                         }
                     }
                 }
+                Section("This iPhone") {
+                    Text(connection.localDeviceId)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    Text(connection.online ? "Mac Online" : "Mac Offline")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Unpair this iPhone", role: .destructive) { confirmingUnpair = true }
+                }
             }
-            if let error = connection.error { Section { Text(error).foregroundStyle(.red) } }
+        }
+        .navigationTitle("Projects")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Unpair") { confirmingUnpair = true }
+                    .accessibilityLabel("Unpair this iPhone")
+            }
         }
         .refreshable { connection.requestProjects() }
         .navigationDestination(for: String.self) { id in
             if let project = connection.projects.first(where: { $0.id == id }) { SessionListView(project: project) }
         }
     }
+
+    private func projectPresence(_ project: RemoteProject) -> some View {
+        let online = project.online && connection.online
+        return HStack(spacing: 4) {
+            Circle().fill(online ? Color.green : Color.gray).frame(width: 8, height: 8)
+            Text(online ? "Online" : "Offline").font(.caption2).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(online ? "Online" : "Offline")
+    }
+
     private var pairingPrompt: some View {
         VStack(spacing: 24) {
+            Text("AgentIDE").font(.largeTitle.bold())
             Image(systemName: "desktopcomputer").font(.system(size: 72)).foregroundStyle(.secondary)
-            Text("No Mac paired").font(.title.bold())
+            Text("No Mac paired").font(.title2.bold())
+            Text("On your Mac, open AgentIDE and choose Pairing. Create a pairing code, then scan its QR code here.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
             Button("Scan Pairing QR") { scanning = true }.buttonStyle(.borderedProminent)
             if let error = connection.error { Text(error).foregroundStyle(.red) }
         }
+        .padding()
+        .navigationTitle("AgentIDE")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -109,7 +177,7 @@ struct FileBrowserContent: View {
             Section {
                 HStack {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search file names and paths", text: $searchQuery)
+                    TextField("Search files", text: $searchQuery)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("file-search-field")
@@ -220,7 +288,7 @@ struct FileBrowserContent: View {
             ContentUnavailableView {
                 Label("Search Unavailable", systemImage: "exclamationmark.magnifyingglass")
             } description: {
-                Text(error.message)
+                Text(MobileFailureCopy.message(error.message, code: error.code))
             } actions: {
                 Button("Retry") { connection.searchFiles(projectId: project.id, query: query) }
                     .buttonStyle(.borderedProminent)
@@ -244,7 +312,9 @@ struct FileBrowserContent: View {
         let label = Label {
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name).foregroundStyle(.primary)
-                Text(entry.relativePath).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                if let subtitle = FileRowPresentation.subtitle(name: entry.name, relativePath: entry.relativePath) {
+                    Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
         } icon: {
             Image(systemName: searchResultIcon(entry)).foregroundStyle(entry.type == .directory ? .blue : .secondary)
@@ -305,7 +375,7 @@ struct FileBrowserContent: View {
     private func directoryError(_ message: String, path: String) -> some View {
         VStack(spacing: 8) {
             Label("Folder Unavailable", systemImage: "folder.badge.questionmark")
-            Text(message).font(.caption).foregroundStyle(.secondary)
+            Text(MobileFailureCopy.message(message)).font(.caption).foregroundStyle(.secondary)
             Button("Retry") { connection.requestFiles(projectId: project.id, relativePath: path) }
                 .buttonStyle(.borderedProminent)
         }
@@ -469,7 +539,7 @@ private struct FileTreeRow: View {
                 if connection.isLoading(projectId: project.id, path: entry.relativePath) { ProgressView().padding(.leading, CGFloat(depth + 1) * 18) }
                 else if let error = connection.directoryError(projectId: project.id, path: entry.relativePath) {
                     HStack {
-                        Text(error).font(.caption).foregroundStyle(.red)
+                        Text(MobileFailureCopy.message(error)).font(.caption).foregroundStyle(.red)
                         Spacer()
                         Button("Retry") { connection.requestFiles(projectId: project.id, relativePath: entry.relativePath) }
                     }
@@ -515,7 +585,12 @@ private struct FileTreeRow: View {
             if entry.type == .directory { Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption).frame(width: 12) }
             else { Color.clear.frame(width: 12, height: 1) }
             Image(systemName: icon).foregroundStyle(entry.type == .directory ? .blue : .secondary)
-            VStack(alignment: .leading, spacing: 2) { Text(entry.name).foregroundStyle(.primary); Text(entry.relativePath).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name).foregroundStyle(.primary)
+                if let subtitle = FileRowPresentation.subtitle(name: entry.name, relativePath: entry.relativePath) {
+                    Text(subtitle).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                }
+            }
             Spacer()
         }
         .padding(.leading, CGFloat(depth) * 18)

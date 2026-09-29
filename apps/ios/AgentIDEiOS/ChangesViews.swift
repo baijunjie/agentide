@@ -21,17 +21,23 @@ struct ChangesView: View {
                 changesError(error, retry: { connection.requestChanges(projectId: project.id) })
             } else if let response = connection.changes(projectId: project.id) {
                 if !response.isGitRepository {
-                    empty("This project is not a Git repository.", icon: "tray")
+                    ContentUnavailableView("Not a Git Repository", systemImage: "tray", description: Text("This project is not a Git repository."))
                 } else if response.changes.isEmpty {
-                    empty("The working tree is clean.", icon: "checkmark.circle")
+                    ContentUnavailableView("No Changes", systemImage: "checkmark.circle", description: Text("The working tree is clean."))
                 } else {
-                    List(response.changes, id: \.changesListId) { change in
-                        NavigationLink {
-                            DiffViewer(project: project, change: change)
-                        } label: {
-                            ChangeRow(change: change)
+                    List {
+                        ForEach(groupedChanges(response.changes), id: \.title) { group in
+                            Section(group.title) {
+                                ForEach(group.changes, id: \.changesListId) { change in
+                                    NavigationLink {
+                                        DiffViewer(project: project, change: change)
+                                    } label: {
+                                        ChangeRow(change: change, showsDisclosure: false)
+                                    }
+                                    .accessibilityIdentifier("change-\(change.area.rawValue)-\(change.relativePath)")
+                                }
+                            }
                         }
-                        .accessibilityIdentifier("change-\(change.area.rawValue)-\(change.relativePath)")
                     }
                 }
             } else {
@@ -48,15 +54,11 @@ struct ChangesView: View {
         .task { connection.requestChanges(projectId: project.id) }
     }
 
-    private func empty(_ text: String, icon: String) -> some View {
-        ContentUnavailableView("No Changes", systemImage: icon, description: Text(text))
-    }
-
     private func changesError(_ error: RemoteRequestError, retry: @escaping () -> Void) -> some View {
         ContentUnavailableView {
             Label("Changes Unavailable", systemImage: "exclamationmark.triangle")
         } description: {
-            Text(error.message)
+            Text(MobileFailureCopy.message(error.message, code: error.code))
         } actions: {
             Button("Retry", action: retry)
         }
@@ -72,40 +74,72 @@ struct ChangesWorkspaceContent: View {
     var body: some View {
         Group {
             if let error = connection.changesError(projectId: project.id) {
-                VStack(spacing: 12) {
-                    ContentUnavailableView("Changes Unavailable", systemImage: "exclamationmark.triangle", description: Text(error.message))
+                ContentUnavailableView {
+                    Label("Changes Unavailable", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(MobileFailureCopy.message(error.message, code: error.code))
+                } actions: {
                     Button("Retry") { connection.requestChanges(projectId: project.id) }
                 }
             } else if let response = connection.changes(projectId: project.id) {
-                if !response.isGitRepository { ContentUnavailableView("No Changes", systemImage: "tray", description: Text("This project is not a Git repository.")) }
+                if !response.isGitRepository { ContentUnavailableView("Not a Git Repository", systemImage: "tray", description: Text("This project is not a Git repository.")) }
                 else if response.changes.isEmpty { ContentUnavailableView("No Changes", systemImage: "checkmark.circle", description: Text("The working tree is clean.")) }
                 else {
-                    List(response.changes, id: \.changesListId) { change in
-                        Button { openDiff(change) } label: { ChangeRow(change: change) }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("change-\(change.area.rawValue)-\(change.relativePath)")
+                    List {
+                        ForEach(groupedChanges(response.changes), id: \.title) { group in
+                            Section(group.title) {
+                                ForEach(group.changes, id: \.changesListId) { change in
+                                    Button {
+                                        connection.requestDiff(projectId: project.id, change: change)
+                                        openDiff(change)
+                                    } label: { ChangeRow(change: change, showsDisclosure: true) }
+                                        .buttonStyle(.plain)
+                                        .accessibilityIdentifier("change-\(change.area.rawValue)-\(change.relativePath)")
+                                }
+                            }
+                        }
                     }
                 }
-            } else { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
+            } else if connection.isLoadingChanges(projectId: project.id) {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 }
 
 private struct ChangeRow: View {
     let change: GitChange
+    var showsDisclosure = false
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: symbol).foregroundStyle(tint).frame(width: 22)
             VStack(alignment: .leading, spacing: 3) {
-                Text(change.relativePath).font(.body.monospaced()).lineLimit(2)
-                if let previous = change.previousRelativePath { Text(previous).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                Text(change.relativePath)
+                    .font(.body.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let previous = change.previousRelativePath {
+                    Text(previous)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 Text("\(change.area.rawValue.capitalized) · \(change.kind.rawValue.capitalized)\(change.isBinary ? " · Binary" : "")")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer()
-            Text(size).font(.caption).foregroundStyle(.secondary)
+            Text(size).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if showsDisclosure {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
+        .accessibilityHint("View diff")
     }
 
     private var symbol: String {
@@ -134,31 +168,57 @@ struct DiffViewer: View {
         }
         .navigationTitle(displayChange.relativePath)
         .navigationBarTitleDisplayMode(.inline)
-        .task { connection.requestDiff(projectId: project.id, change: change) }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color(.systemBackground))
+        .belowWorkspaceNavigationBar()
+        .task(id: change.changesListId) { connection.requestDiff(projectId: project.id, change: change) }
+        .onChange(of: connection.loadingDiffs) { _, _ in retryDiffIfIdle() }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(displayChange.relativePath).font(.headline.monospaced())
-            if let previous = displayChange.previousRelativePath { Text("from \(previous)").font(.caption.monospaced()).foregroundStyle(.secondary) }
-            Text("\(displayChange.area.rawValue.capitalized) · \(displayChange.kind.rawValue.capitalized)").font(.caption).foregroundStyle(.secondary)
+            if let previous = displayChange.previousRelativePath {
+                Text("From \(previous)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text("\(displayChange.area.rawValue.capitalized) · \(displayChange.kind.rawValue.capitalized)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding()
     }
 
     @ViewBuilder private var content: some View {
         if let error = connection.diffError(projectId: project.id, change: change) {
-            VStack(spacing: 12) {
-                ContentUnavailableView("Diff Unavailable", systemImage: "exclamationmark.triangle", description: Text(error.message))
-                Button("Retry") { connection.requestDiff(projectId: project.id, change: change) }
+            ContentUnavailableView {
+                Label("Diff Unavailable", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(diffFailureDetail(error))
+            } actions: {
+                Button(diffRetryTitle(error)) { connection.requestDiff(projectId: project.id, change: change) }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if displayChange.isBinary {
             ContentUnavailableView("Binary File", systemImage: "doc.fill", description: Text(binarySize))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let response = connection.diff(projectId: project.id, change: change) {
             DiffText(diff: response.diff ?? "")
         } else {
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.systemBackground))
         }
+    }
+
+    private func retryDiffIfIdle() {
+        guard connection.diff(projectId: project.id, change: change) == nil,
+              connection.diffError(projectId: project.id, change: change) == nil,
+              !connection.isLoadingDiff(projectId: project.id, change: change) else { return }
+        connection.requestDiff(projectId: project.id, change: change)
     }
 
     private var binarySize: String {
@@ -171,22 +231,51 @@ struct DiffViewer: View {
     }
 }
 
+private struct ChangeGroup: Identifiable {
+    let title: String
+    let changes: [GitChange]
+    var id: String { title }
+}
+
+private func groupedChanges(_ changes: [GitChange]) -> [ChangeGroup] {
+    let staged = changes.filter { $0.area == .staged }
+    let unstaged = changes.filter { $0.area == .unstaged }
+    return [("Staged", staged), ("Unstaged", unstaged)]
+        .filter { !$0.1.isEmpty }
+        .map { ChangeGroup(title: $0.0, changes: $0.1) }
+}
+
+private func diffFailureDetail(_ error: RemoteRequestError) -> String {
+    if error.code == "DIFF_TOO_LARGE" {
+        return "\(error.message). Trying again sends the same request. The diff stays over the transfer limit until it is smaller."
+    }
+    return MobileFailureCopy.message(error.message, code: error.code)
+}
+
+private func diffRetryTitle(_ error: RemoteRequestError) -> String {
+    error.code == "DIFF_TOO_LARGE" ? "Request this diff again" : "Retry"
+}
+
 private struct DiffText: View {
     let diff: String
 
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(DiffParser.parse(diff).enumerated()), id: \.offset) { _, line in
-                    DiffLine(line: line)
+        // One scroll view on both axes centers a short diff and clips the leading edge of the first line.
+        ScrollView {
+            ScrollView(.horizontal) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(DiffParser.parse(diff).enumerated()), id: \.offset) { _, line in
+                        DiffLine(line: line)
+                    }
                 }
+                .font(.system(size: 13, design: .monospaced))
+                .padding()
             }
-            .font(.system(size: 13, design: .monospaced))
-            .fixedSize(horizontal: true, vertical: false)
-            .padding()
+            .defaultScrollAnchor(.leading)
         }
+        .defaultScrollAnchor(.top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
-
 }
 
 private struct DiffLine: View {

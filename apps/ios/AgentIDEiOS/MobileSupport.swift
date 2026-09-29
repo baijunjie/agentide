@@ -10,6 +10,15 @@ enum MobileFailureCopy {
     }
 }
 
+enum DeviceIdentifierDisplay {
+    /// The on-screen form can drop the middle of a long identifier. Copying and the accessibility label keep the original string.
+    static func visible(_ identifier: String) -> String {
+        let characters = Array(identifier)
+        guard characters.count > 18 else { return identifier }
+        return String(characters.prefix(8)) + "…" + String(characters.suffix(4))
+    }
+}
+
 enum FileRowPresentation {
     /// The root row's relative path repeats the name. A nested path still says where the file is.
     static func subtitle(name: String, relativePath: String) -> String? {

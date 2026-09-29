@@ -55,7 +55,7 @@ Agent Host 是会话元数据与规范化事件历史的本地权威来源：
 
 iPhone 的项目主路径是 Projects → Session List → Agent Session：
 
-- Session List 的导航标题是完整项目名。列表按更新时间倒序显示当前项目的会话标题、首字母大写的 Agent 类型和统一状态。列表可下拉刷新；Mac 离线或项目没有启用任何 Agent 时不能新建会话。
+- Session List 的导航标题是完整项目名。列表按更新时间倒序显示当前项目的会话标题、首字母大写的 Agent 类型和统一状态。列表可下拉刷新。Mac 离线或项目没有启用任何 Agent 时不能新建会话，列表说明原因：Mac 离线时是 `You can create a session when your Mac is online.`；没有启用 Agent 时是 `This project has no agent enabled.`。两者同时成立时只显示离线这句。列表为空时，这句话就是空态说明，不另附新建提示。已有会话时，这句话在会话行之前单独一行。
 - 新建会话只能选择项目已启用的 Claude 或 Codex，并且必须填写非空 initial task。任务为空时示例是 `For example, fix the failing test`，并说明要先输入任务，Create 才可用。创建成功后新会话进入列表首位，界面直接进入该会话。
 - 会话层的导航标题保留会话标题。状态徽章在动态顶部，会随动态滚动；`waiting user` 显示 `Waiting for you`，不用枚举名做标题。只有 `idle` 状态可以发送非空文本；`running` 状态改为提供取消当前轮次的操作。会话当前不能发送时，输入区说明原因。会话列表和 Agent Session 都可以进入当前项目的文件浏览器。
 - Composer 草稿按会话隔离。切换会话、进入文件浏览、导航往返或暂时离线都不会清空草稿；从文件 Viewer 加入 Agent 引用时，非空草稿以换行追加，重复引用不自动去重。文件引用格式和入口见 [项目登记与文件浏览](project-files.md#文本与图片查看)。

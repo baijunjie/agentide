@@ -271,7 +271,7 @@ final class MobileConnection: ObservableObject {
             UserDefaults.standard.removeObject(forKey: "submittedInteractions")
             UserDefaults.standard.removeObject(forKey: "resolvedInteractions")
         }
-        projects = recoveryCache?.projects ?? []
+        projects = recoveryCache?.projects ?? scenarioRuntime?.seededProjects() ?? []
         sessions = restoredSessions
         sessionEvents = restoredEvents
         if scenarioRuntime != nil {

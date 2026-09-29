@@ -3,6 +3,12 @@ import AgentIDEProtocol
 @testable import AgentIDEiOS
 
 final class MobileScenarioTests: XCTestCase {
+    func testLongDeviceIdentifierShortensWithoutChangingAShortOne() {
+        XCTAssertEqual(DeviceIdentifierDisplay.visible("scenario-ios"), "scenario-ios")
+        XCTAssertEqual(DeviceIdentifierDisplay.visible(String(repeating: "a", count: 18)), String(repeating: "a", count: 18))
+        XCTAssertEqual(DeviceIdentifierDisplay.visible(String(repeating: "b", count: 19)), "bbbbbbbb…bbbb")
+    }
+
     func testToolSummaryClipsToOneShortLine() {
         XCTAssertEqual(ToolSummary.line(nil), "")
         XCTAssertEqual(ToolSummary.line(""), "")

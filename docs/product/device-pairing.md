@@ -36,7 +36,7 @@ Relay 每 15 秒发送 WebSocket ping；连续一个心跳周期未收到 pong �
 
 Mac 可以撤销已绑定的 iPhone。撤销会使目标 token 失效、删除相关绑定并以专用关闭码断开目标的现有 WebSocket；iOS 收到该关闭码后删除 Keychain 中的 token 并回到未配对状态。之后可使用新的二维码重新绑定，同一 iPhone 设备标识会取得新 token。
 
-已鉴权设备也可以撤销自身；iPhone 不能撤销已绑定的 Mac。已配对后，iPhone 的项目页可以解除这台手机，入口只有 `Unpair this iPhone`。确认 `Unpair this iPhone?` 后只撤销自身，不撤销 Mac，也不显示 Mac 的名字。`This iPhone` 一节展示本机设备标识，下面的说明是 `This identifier is for this iPhone.`，不在这里再显示 `Mac Online` / `Mac Offline`。解除失败是单独的提示，不会把项目列表换成失败页。
+已鉴权设备也可以撤销自身；iPhone 不能撤销已绑定的 Mac。已配对后，iPhone 的项目页可以解除这台手机，入口只有 `Unpair this iPhone`。确认框是 `Unpair this iPhone?`，其中有可见的 `Cancel`；点取消不解除配对。确认 `Unpair` 后只撤销自身，不撤销 Mac，也不显示 Mac 的名字。`This iPhone` 一节展示本机设备标识：不超过 18 个字符时原文显示；更长时界面显示前 8 个字符、省略号 `…` 和后 4 个字符。辅助功能标签和 Copy 始终是完整字符串，缩短后的那一行也不能选中后复制成省略形式。下面的说明是 `This identifier is for this iPhone.`，不在这里再显示 `Mac Online` / `Mac Offline`。解除失败是单独的提示，不会把项目列表换成失败页。
 
 ## Relay 部署约束
 

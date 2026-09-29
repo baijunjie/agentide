@@ -17,6 +17,8 @@ enum MobileScenario: String, CaseIterable {
     case searchEmpty = "search-empty"
     case searchLimited = "search-limited"
     case searchMissingDirectory = "search-missing-directory"
+    case noAgents = "no-agents"
+    case sessionListOffline = "offline-session"
 
     static func fromLaunchArguments(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> MobileScenario? {
 #if DEBUG
@@ -72,8 +74,8 @@ final class MobileScenarioRuntime {
         self.scenario = scenario
         presence = MobileScenarioPresence(
             paired: true,
-            online: scenario != .offline,
-            macDeviceId: scenario == .offline ? nil : "scenario-mac"
+            online: scenario != .offline && scenario != .sessionListOffline,
+            macDeviceId: scenario == .offline || scenario == .sessionListOffline ? nil : "scenario-mac"
         )
 
         let session = Self.session(id: "session-demo", status: "waiting_user")
@@ -385,8 +387,16 @@ final class MobileScenarioRuntime {
         return success(for: request, type: type, replyTo: requestId, payload: payload)
     }
 
+    func seededProjects() -> [RemoteProject] {
+        guard scenario == .sessionListOffline,
+              let data = try? JSONSerialization.data(withJSONObject: [project()]),
+              let projects = try? JSONDecoder().decode([RemoteProject].self, from: data) else { return [] }
+        return projects
+    }
+
     private func project() -> [String: Any] {
-        ["id": "project-demo", "name": "Scenario Workspace", "createdAt": "2026-09-27T00:00:00.000Z", "enabledAgents": ["codex", "claude"], "online": true]
+        let agents: [String] = scenario == .noAgents ? [] : ["codex", "claude"]
+        return ["id": "project-demo", "name": "Scenario Workspace", "createdAt": "2026-09-27T00:00:00.000Z", "enabledAgents": agents, "online": true]
     }
 
     private func searchResponse(

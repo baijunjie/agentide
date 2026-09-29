@@ -17,7 +17,8 @@ struct MobileHomeView: View {
                 Task { await connection.claim(qrValue: value) }
             }
         }
-        .confirmationDialog("Unpair this iPhone?", isPresented: $confirmingUnpair, titleVisibility: .visible) {
+        // A confirmation dialog treats the cancel role as a dismiss gesture, so Cancel is absent from the dialog and the accessibility tree.
+        .alert("Unpair this iPhone?", isPresented: $confirmingUnpair) {
             Button("Unpair", role: .destructive) { Task { await connection.revokeSelf() } }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -61,15 +62,13 @@ struct MobileHomeView: View {
                         }
                     }
                 }
-                Section("This iPhone") {
-                    Text(connection.localDeviceId)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                    Text("This identifier is for this iPhone.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Unpair this iPhone", role: .destructive) { confirmingUnpair = true }
-                }
+            }
+            Section("This iPhone") {
+                deviceIdentifier
+                Text("This identifier is for this iPhone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Unpair this iPhone", role: .destructive) { confirmingUnpair = true }
             }
         }
         .navigationTitle("Projects")
@@ -78,6 +77,19 @@ struct MobileHomeView: View {
         .navigationDestination(for: String.self) { id in
             if let project = connection.projects.first(where: { $0.id == id }) { SessionListView(project: project) }
         }
+    }
+
+    @ViewBuilder private var deviceIdentifier: some View {
+        let identifier = connection.localDeviceId
+        let shown = DeviceIdentifierDisplay.visible(identifier)
+        let text = Text(shown)
+            .font(.caption.monospaced())
+            .accessibilityLabel(identifier)
+            .contextMenu {
+                Button("Copy") { UIPasteboard.general.string = identifier }
+            }
+        // Selecting a shortened line would copy the shortened form. The menu copies the original string.
+        if shown == identifier { text.textSelection(.enabled) } else { text }
     }
 
     @ViewBuilder private func projectRow(_ project: RemoteProject) -> some View {

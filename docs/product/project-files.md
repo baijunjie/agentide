@@ -24,7 +24,7 @@ iPhone 以响应的 `replyTo` 匹配原请求，不接受无法匹配请求类�
 ## iPhone 项目列表
 
 - 已配对时导航标题是 `Projects`。`Mac Online` / `Mac Offline` 只在列表顶部出现一次。项目行显示项目名、首字母大写的 Agent 名，以及该项目自己的 `Online` 或 `Offline`。
-- Mac 仍在线，但这次项目列表请求失败或超时时，页面只显示失败说明和 Retry，不同时显示 `Mac Online` 或 `No Projects`。超时说明会注明可以再试。
+- Mac 仍在线，但这次项目列表请求失败或超时时，失败说明和 Retry 替换项目列表，不同时显示 `Mac Online` 或 `No Projects`。底部的 `This iPhone` 仍在。超时说明会注明可以再试。
 - Mac 离线时继续显示 `Mac Offline`。没有项目时仍是离线空态，不用这次失败的说明替换它。
 
 解除这台 iPhone 的入口、确认和失败提示见 [设备配对与 Relay 连接](device-pairing.md#撤销与重新配对)。

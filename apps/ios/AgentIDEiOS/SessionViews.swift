@@ -79,7 +79,16 @@ struct SessionListView: View {
             Section("Sessions") {
                 let sessions = connection.sessions[project.id] ?? []
                 if sessions.isEmpty, !connection.loadingSessionProjects.contains(project.id) {
-                    ContentUnavailableView("No Sessions", systemImage: "bubble.left.and.bubble.right", description: Text("Create a session to start working with an agent."))
+                    ContentUnavailableView(
+                        "No Sessions",
+                        systemImage: "bubble.left.and.bubble.right",
+                        description: Text(createSessionBlockedReason ?? "Create a session to start working with an agent.")
+                    )
+                } else if let reason = createSessionBlockedReason {
+                    Text(reason)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 ForEach(sessions, id: \.id) { session in
                     Button {
@@ -126,6 +135,12 @@ struct SessionListView: View {
             showingSession = true
             connection.createdSession = nil
         }
+    }
+
+    private var createSessionBlockedReason: String? {
+        if !connection.online { return "You can create a session when your Mac is online." }
+        if project.enabledAgents.isEmpty { return "This project has no agent enabled." }
+        return nil
     }
 }
 

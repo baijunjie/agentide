@@ -222,14 +222,10 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["This identifier is for this iPhone."].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["scenario-ios"].exists)
         app.buttons["Unpair this iPhone"].tap()
-        let unpairSheet = app.sheets["Unpair this iPhone?"]
         let unpairAlert = app.alerts["Unpair this iPhone?"]
-        if unpairSheet.waitForExistence(timeout: 5) {
-            unpairSheet.buttons["Unpair"].tap()
-        } else {
-            XCTAssertTrue(unpairAlert.waitForExistence(timeout: 2))
-            unpairAlert.buttons["Unpair"].tap()
-        }
+        XCTAssertTrue(unpairAlert.waitForExistence(timeout: 5))
+        XCTAssertTrue(unpairAlert.buttons["Cancel"].isHittable)
+        unpairAlert.buttons["Unpair"].tap()
         XCTAssertTrue(app.staticTexts["No Mac paired"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.navigationBars["AgentIDE"].exists)
         let navigationBottom = app.navigationBars["AgentIDE"].frame.maxY
@@ -438,11 +434,15 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(failed.navigationBars["Projects"].waitForExistence(timeout: 5))
         XCTAssertTrue(failed.staticTexts["Scenario request failure"].waitForExistence(timeout: 5))
         XCTAssertTrue(failed.buttons["Retry"].exists)
+        XCTAssertTrue(failed.buttons["Unpair this iPhone"].exists)
+        XCTAssertTrue(failed.staticTexts["This identifier is for this iPhone."].exists)
         XCTAssertFalse(failed.staticTexts["No Projects"].exists)
         XCTAssertFalse(failed.staticTexts["Mac Online"].exists)
 
         let timedOut = launch(scenario: "timeout")
         XCTAssertTrue(timedOut.staticTexts["Request timed out. You can try again."].waitForExistence(timeout: 20))
+        XCTAssertTrue(timedOut.buttons["Unpair this iPhone"].exists)
+        XCTAssertTrue(timedOut.staticTexts["This identifier is for this iPhone."].exists)
         XCTAssertFalse(timedOut.staticTexts["No Projects"].exists)
         XCTAssertFalse(timedOut.staticTexts["Mac Online"].exists)
 
@@ -551,14 +551,10 @@ final class ScenarioSmokeUITests: XCTestCase {
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.navigationBars["Projects"].waitForExistence(timeout: 5))
         app.buttons["Unpair this iPhone"].firstMatch.tap()
-        let unpairSheet = app.sheets["Unpair this iPhone?"]
         let unpairAlert = app.alerts["Unpair this iPhone?"]
-        if unpairSheet.waitForExistence(timeout: 5) {
-            unpairSheet.buttons["Unpair"].tap()
-        } else {
-            XCTAssertTrue(unpairAlert.waitForExistence(timeout: 2))
-            unpairAlert.buttons["Unpair"].tap()
-        }
+        XCTAssertTrue(unpairAlert.waitForExistence(timeout: 5))
+        XCTAssertTrue(unpairAlert.buttons["Cancel"].isHittable)
+        unpairAlert.buttons["Unpair"].tap()
         XCTAssertTrue(app.staticTexts["No Mac paired"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.navigationBars["AgentIDE"].exists)
         let pairingNavigationBottom = app.navigationBars["AgentIDE"].frame.maxY
@@ -745,6 +741,46 @@ final class ScenarioSmokeUITests: XCTestCase {
                 && sent.frame.minY > feed.frame.maxY - 1
         }, object: sent)
         XCTAssertEqual(XCTWaiter.wait(for: [stayed], timeout: 5), .completed, "anchor \(anchor.frame) was \(anchorY) sent \(sent.frame) feed \(feed.frame)")
+    }
+
+    func testFailedProjectListKeepsUnpairAndCancelDoesNotUnpair() {
+        let failed = launch(scenario: "request-failure")
+        XCTAssertTrue(failed.buttons["Unpair this iPhone"].waitForExistence(timeout: 5))
+        failed.buttons["Unpair this iPhone"].tap()
+        let alert = failed.alerts["Unpair this iPhone?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        let cancel = alert.buttons["Cancel"]
+        XCTAssertTrue(cancel.isHittable)
+        cancel.tap()
+        XCTAssertTrue(failed.staticTexts["Scenario request failure"].waitForExistence(timeout: 2))
+        XCTAssertTrue(failed.buttons["Retry"].exists)
+        XCTAssertTrue(failed.buttons["Unpair this iPhone"].exists)
+        XCTAssertFalse(failed.staticTexts["No Mac paired"].exists)
+    }
+
+    func testDisabledCreateSessionExplainsWhy() {
+        let noAgents = launch(scenario: "no-agents")
+        XCTAssertTrue(noAgents.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        noAgents.staticTexts["Scenario Workspace"].tap()
+        let create = noAgents.buttons["Create session"]
+        XCTAssertTrue(create.waitForExistence(timeout: 5))
+        XCTAssertFalse(create.isEnabled)
+        XCTAssertTrue(noAgents.staticTexts["This project has no agent enabled."].exists)
+        XCTAssertTrue(noAgents.buttons["Browse files"].exists)
+        XCTAssertTrue(noAgents.buttons["Changes"].exists)
+        XCTAssertFalse(noAgents.staticTexts["New"].exists)
+        XCTAssertFalse(noAgents.staticTexts["Files"].exists)
+
+        let offline = launch(scenario: "offline-session")
+        XCTAssertTrue(offline.staticTexts["Scenario Workspace"].waitForExistence(timeout: 5))
+        XCTAssertTrue(offline.staticTexts["Mac Offline"].exists)
+        offline.staticTexts["Scenario Workspace"].tap()
+        let offlineCreate = offline.buttons["Create session"]
+        XCTAssertTrue(offlineCreate.waitForExistence(timeout: 5))
+        XCTAssertFalse(offlineCreate.isEnabled)
+        XCTAssertTrue(offline.staticTexts["You can create a session when your Mac is online."].exists)
+        XCTAssertTrue(offline.buttons["Browse files"].exists)
+        XCTAssertFalse(offline.staticTexts["New"].exists)
     }
 
     func testNewEventsFollowWhileStillAtTheEnd() {

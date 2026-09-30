@@ -187,6 +187,13 @@ final class MobileConnection: ObservableObject {
     @Published private var imageRevision = 0
     @Published var error: String?
     @Published var unpairFailure: String?
+    @Published var notificationNotice: String?
+    @Published private(set) var pendingNotificationIntent: NotificationIntent?
+    @Published private(set) var notificationReadyProjectId: String?
+    @Published private(set) var notificationValidatedProjectId: String?
+    @Published private(set) var notificationOutcomeProjectId: String?
+    @Published private(set) var notificationRegistrationError: String?
+    @Published private(set) var notificationNavigationRevision = 0
     private let deviceId: String
     private var acceptingRelayMessages = false
     var localDeviceId: String { deviceId }
@@ -218,9 +225,24 @@ final class MobileConnection: ObservableObject {
     private var draftRevisions: [String: Int]
     private var submittedDrafts: [String: SubmittedDraft] = [:]
     private var activeSessionId: String?
+    private var notificationProjectListRequestId: String?
+    private var notificationSessionListRequestId: String?
     private var pendingEventInteractions: [String: Set<String>] = [:]
     private var snapshottingSessions: Set<String> = []
     private var recoveryPersistenceTask: Task<Void, Never>?
+    private lazy var pushRegistration = PushRegistrationCoordinator(
+        submit: { [weak self] token, preferences in
+            guard let self else { throw CancellationError() }
+            try await self.submitPushRegistration(token: token, preferences: preferences)
+        },
+        failed: { [weak self] error in
+            self?.notificationRegistrationError = error.localizedDescription
+        },
+        succeeded: { [weak self] in
+            self?.notificationRegistrationError = nil
+        }
+    )
+    private var pendingPushRegistration: (token: String, preferences: NotificationPreferences)?
     private let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 3
@@ -336,6 +358,7 @@ final class MobileConnection: ObservableObject {
 
     private func dropPairing(server: String?) {
         acceptingRelayMessages = false
+        pushRegistration.reset()
         recoveryPersistenceTask?.cancel()
         let task = socket
         socket = nil
@@ -350,6 +373,7 @@ final class MobileConnection: ObservableObject {
         macDeviceId = nil
         error = nil
         unpairFailure = nil
+        clearNotificationNavigationState(clearNotice: true, clearRegistrationError: true)
         projects = []
         files = [:]
         loadingPaths = []
@@ -411,8 +435,102 @@ final class MobileConnection: ObservableObject {
             let claim = try JSONDecoder().decode(Claim.self, from: data)
             UserDefaults.standard.set(payload.server, forKey: "relayServer"); CredentialStore.save(claim.token, for: payload.server); paired = true
             acceptingRelayMessages = true
+            submitPendingPushRegistration()
             connect(server: payload.server, token: claim.token)
         } catch { self.error = error.localizedDescription }
+    }
+
+    func registerPushToken(_ pushToken: String, preferences: NotificationPreferences) {
+        guard scenarioRuntime == nil else { return }
+        pendingPushRegistration = (pushToken, preferences)
+        submitPendingPushRegistration()
+    }
+
+    func retryPushRegistration() {
+        guard scenarioRuntime == nil else { return }
+        submitPendingPushRegistration()
+        pushRegistration.retry()
+    }
+
+    private func submitPendingPushRegistration() {
+        guard paired,
+              let pendingPushRegistration,
+              let server = UserDefaults.standard.string(forKey: "relayServer"),
+              CredentialStore.token(for: server) != nil else { return }
+        pushRegistration.update(token: pendingPushRegistration.token, preferences: pendingPushRegistration.preferences)
+    }
+
+    private func submitPushRegistration(token pushToken: String, preferences: NotificationPreferences) async throws {
+        guard let server = UserDefaults.standard.string(forKey: "relayServer"),
+              let token = CredentialStore.token(for: server),
+              let base = URL(string: server),
+              let url = URL(string: "/notifications/token", relativeTo: base) else { throw URLError(.notConnectedToInternet) }
+        #if DEBUG
+        let environment = PushEnvironment.development
+        #else
+        let environment = PushEnvironment.production
+        #endif
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(deviceId, forHTTPHeaderField: "X-Device-Id")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(PushTokenRegistration(
+            token: pushToken, environment: environment, preferences: preferences
+        ))
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
+    func receiveNotification(_ delivery: NotificationDelivery) {
+        notificationNotice = notice(for: delivery.intent.category)
+        guard delivery.opensSession else { return }
+        pendingNotificationIntent = delivery.intent
+        notificationReadyProjectId = nil
+        notificationValidatedProjectId = nil
+        notificationOutcomeProjectId = nil
+        notificationProjectListRequestId = nil
+        notificationSessionListRequestId = nil
+        resumeNotificationNavigationIfPossible()
+    }
+
+    func clearPendingNotification(message: String? = nil, outcomeProjectId: String? = nil) {
+        pendingNotificationIntent = nil
+        notificationReadyProjectId = nil
+        notificationValidatedProjectId = nil
+        notificationOutcomeProjectId = outcomeProjectId
+        notificationProjectListRequestId = nil
+        notificationSessionListRequestId = nil
+        if let message { notificationNotice = message }
+    }
+
+    func consumeNotificationNavigationOutcome() {
+        clearNotificationNavigationState(clearNotice: false, clearRegistrationError: false)
+    }
+
+    private func clearNotificationNavigationState(clearNotice: Bool, clearRegistrationError: Bool) {
+        pendingNotificationIntent = nil
+        notificationReadyProjectId = nil
+        notificationValidatedProjectId = nil
+        notificationOutcomeProjectId = nil
+        notificationProjectListRequestId = nil
+        notificationSessionListRequestId = nil
+        if clearNotice { notificationNotice = nil }
+        if clearRegistrationError { notificationRegistrationError = nil }
+    }
+
+    var notificationNavigationProjectId: String? {
+        if let notificationOutcomeProjectId { return notificationOutcomeProjectId }
+        guard let intent = pendingNotificationIntent,
+              notificationValidatedProjectId == intent.projectId,
+              projects.contains(where: { $0.id == intent.projectId }) else { return nil }
+        return intent.projectId
+    }
+
+    func retryNotificationNavigation() {
+        resumeNotificationNavigationIfPossible()
     }
 
     func requestProjects() {
@@ -427,6 +545,37 @@ final class MobileConnection: ObservableObject {
         sessionErrors.removeValue(forKey: projectId)
         loadingSessionProjects.insert(projectId)
         send(type: "session.list", target: macDeviceId, projectId: projectId, payload: [:], pending: .sessionList(projectId))
+    }
+
+    private func resumeNotificationNavigationIfPossible() {
+        guard pendingNotificationIntent != nil else { return }
+        guard online, let macDeviceId else {
+            notificationNotice = "Your Mac is offline. This notification will open when it reconnects."
+            return
+        }
+        guard notificationProjectListRequestId == nil, notificationSessionListRequestId == nil else { return }
+        // A notification is an external pointer, so cached projects are never authoritative here.
+        let requestId = UUID().uuidString
+        notificationProjectListRequestId = requestId
+        send(type: "project.list", target: macDeviceId, payload: [:], pending: .projectList, requestId: requestId)
+    }
+
+    private func requestNotificationSessions(projectId: String) {
+        guard online, let macDeviceId else { return }
+        if loadingSessionProjects.contains(projectId) {
+            if let existing = pendingRequests.first(where: { _, pending in
+                if case .sessionList(projectId) = pending { return true }
+                return false
+            })?.key {
+                notificationSessionListRequestId = existing
+                return
+            }
+            loadingSessionProjects.remove(projectId)
+        }
+        loadingSessionProjects.insert(projectId)
+        let requestId = UUID().uuidString
+        notificationSessionListRequestId = requestId
+        send(type: "session.list", target: macDeviceId, projectId: projectId, payload: [:], pending: .sessionList(projectId), requestId: requestId)
     }
 
     func createSession(projectId: String, agentType: AgentType, initialTask: String) {
@@ -508,6 +657,8 @@ final class MobileConnection: ObservableObject {
         guard scenarioRuntime == nil else { return }
         switch phase {
         case .active:
+            retryPushRegistration()
+            retryNotificationNavigation()
             guard !online, let server = UserDefaults.standard.string(forKey: "relayServer"),
                   let token = CredentialStore.token(for: server) else { return }
             connect(server: server, token: token)
@@ -795,8 +946,11 @@ final class MobileConnection: ObservableObject {
         if type == "system.presence", let payload = message["payload"] as? [String: Any] {
             online = payload["online"] as? Bool ?? false
             macDeviceId = message["sourceDeviceId"] as? String
-            if online { requestProjects(); resubscribeSessions() }
-            else { failAllPending(message: "Mac is offline") }
+            if online { requestProjects(); resubscribeSessions(); resumeNotificationNavigationIfPossible() }
+            else {
+                failAllPending(message: "Mac is offline")
+                resumeNotificationNavigationIfPossible()
+            }
             return
         }
         let replyTo = message["replyTo"] as? String
@@ -879,12 +1033,40 @@ final class MobileConnection: ObservableObject {
             if let replyTo, case .some(.projectList) = pendingRequests[replyTo] {
                 projects = response.projects
                 scheduleRecoveryPersistence()
+                if replyTo == notificationProjectListRequestId, let intent = pendingNotificationIntent {
+                    notificationProjectListRequestId = nil
+                    guard response.projects.contains(where: { $0.id == intent.projectId }) else {
+                        clearPendingNotification(message: "The notification project is no longer available. Showing projects instead.")
+                        finishPending(replyTo, error: nil)
+                        return
+                    }
+                    notificationValidatedProjectId = intent.projectId
+                    requestNotificationSessions(projectId: intent.projectId)
+                }
                 handled = true
             }
         } else if type == "session.list.response", let projectId = message["projectId"] as? String,
                   let response = try? JSONDecoder().decode(SessionListPayload.self, from: payloadData) {
             if let replyTo, case let .some(.sessionList(expectedProjectId)) = pendingRequests[replyTo], expectedProjectId == projectId {
                 sessions[projectId] = response.sessions.sorted { $0.updatedAt > $1.updatedAt }
+                if replyTo == notificationSessionListRequestId, let intent = pendingNotificationIntent,
+                   intent.projectId == projectId {
+                    notificationSessionListRequestId = nil
+                    guard let target = response.sessions.first(where: { $0.id == intent.sessionId }) else {
+                        clearPendingNotification(message: "The notification target is no longer available. Showing this project's sessions instead.", outcomeProjectId: projectId)
+                        notificationNavigationRevision += 1
+                        finishPending(replyTo, error: nil)
+                        return
+                    }
+                    guard !intent.category.isWaiting || target.status == .waitingUser else {
+                        clearPendingNotification(message: "That request has already been resolved. Showing this project's sessions instead.", outcomeProjectId: projectId)
+                        notificationNavigationRevision += 1
+                        finishPending(replyTo, error: nil)
+                        return
+                    }
+                    notificationReadyProjectId = projectId
+                    notificationNavigationRevision += 1
+                }
                 for session in response.sessions {
                     sessionProjects[session.id] = projectId
                     if isTerminal(session.status) {
@@ -981,9 +1163,10 @@ final class MobileConnection: ObservableObject {
         if let replyTo { finishPending(replyTo, error: handled ? nil : "Invalid response") }
     }
 
+    @discardableResult
     private func send(type: String, target: String, projectId: String? = nil, sessionId: String? = nil,
-                      payload: [String: Any], pending: PendingRequest? = nil) {
-        let id = UUID().uuidString
+                      payload: [String: Any], pending: PendingRequest? = nil, requestId: String? = nil) -> String {
+        let id = requestId ?? UUID().uuidString
         var message: [String: Any] = ["version": 1, "id": id, "type": type, "sourceDeviceId": deviceId,
                                       "targetDeviceId": target, "timestamp": ISO8601DateFormatter().string(from: Date()), "payload": payload]
         if let projectId { message["projectId"] = projectId }
@@ -998,26 +1181,30 @@ final class MobileConnection: ObservableObject {
         }
         guard let data = try? JSONSerialization.data(withJSONObject: message) else {
             if let pending { finishPending(id, error: "Not connected", clearInteractionSubmission: pending.isInteraction) }
-            return
+            return id
         }
         if let scenarioRuntime {
             enqueueScenarioMessages(scenarioRuntime.receive(data))
             enqueueScenarioMessages(scenarioRuntime.drain())
-            return
+            return id
         }
         guard let text = String(data: data, encoding: .utf8), let socket else {
             if let pending { finishPending(id, error: "Not connected", clearInteractionSubmission: pending.isInteraction) }
-            return
+            return id
         }
         socket.send(.string(text)) { [weak self] sendError in
             guard let sendError else { return }
             Task { @MainActor in self?.finishPending(id, error: sendError.localizedDescription, clearInteractionSubmission: pending?.isInteraction == true) }
         }
+        return id
     }
 
     private func finishPending(_ id: String, error message: String?, clearInteractionSubmission: Bool = false) {
         guard let pending = pendingRequests.removeValue(forKey: id) else { return }
         pendingTimeouts.removeValue(forKey: id)?.cancel()
+        let retryNotificationNavigation = id == notificationProjectListRequestId || id == notificationSessionListRequestId
+        if id == notificationProjectListRequestId { notificationProjectListRequestId = nil }
+        if id == notificationSessionListRequestId { notificationSessionListRequestId = nil }
         switch pending {
         case .projectList:
             if let message { error = message }
@@ -1104,9 +1291,14 @@ final class MobileConnection: ObservableObject {
             }
             persistRecoveryState()
         }
+        if retryNotificationNavigation, message != nil {
+            notificationReadyProjectId = nil
+        }
     }
 
     private func failAllPending(message: String) {
+        notificationProjectListRequestId = nil
+        notificationSessionListRequestId = nil
         for id in Array(pendingRequests.keys) { finishPending(id, error: message) }
     }
 
@@ -1583,6 +1775,15 @@ private func decodeImage(_ base64: String) -> DecodedImage? {
 }
 
 private func isSecure(_ url: URL) -> Bool { url.scheme == "https" || (url.scheme == "http" && (url.host == "127.0.0.1" || url.host == "localhost")) }
+
+private func notice(for category: NotificationCategory) -> String {
+    switch category {
+    case .approvalWaiting: "An Agent session is waiting for approval."
+    case .questionWaiting: "An Agent session is waiting for an answer."
+    case .taskCompleted: "An Agent task completed."
+    case .taskFailed: "An Agent task failed."
+    }
+}
 
 private func isPendingInteractionEvent(_ event: AgentEvent) -> Bool {
     if case .approvalRequested = event { return true }

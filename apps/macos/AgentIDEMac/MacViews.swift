@@ -7,14 +7,44 @@ struct MacHomeView: View {
     @EnvironmentObject private var connection: MacConnection
     @State private var section = MacSection.pairing
     var body: some View {
-        NavigationSplitView {
-            List(selection: $section) {
-                Label("Pairing", systemImage: "link").tag(MacSection.pairing)
-                Label("Projects", systemImage: "folder").tag(MacSection.projects)
-            }.navigationTitle("AgentIDE")
-        } detail: {
-            if section == .pairing { PairingView() } else { ProjectListView() }
+        VStack(spacing: 0) {
+            NavigationSplitView {
+                List(selection: $section) {
+                    Label("Pairing", systemImage: "link").tag(MacSection.pairing)
+                    Label("Projects", systemImage: "folder").tag(MacSection.projects)
+                }.navigationTitle("AgentIDE")
+            } detail: {
+                if section == .pairing { PairingView() } else { ProjectListView() }
+            }
+            NotificationOutboxStatus()
         }.frame(minWidth: 760, minHeight: 560)
+    }
+}
+
+private struct NotificationOutboxStatus: View {
+    @EnvironmentObject private var connection: MacConnection
+
+    var body: some View {
+        if connection.notificationOutboxOverflow != nil || connection.notificationDeliveryError != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                if let overflow = connection.notificationOutboxOverflow {
+                    HStack(alignment: .top, spacing: 8) {
+                        Label(overflow, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Button("Dismiss") { connection.clearNotificationOutboxOverflow() }
+                    }
+                }
+                if let deliveryError = connection.notificationDeliveryError {
+                    Label("Notification delivery is waiting to retry: \(deliveryError)", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.red)
+                }
+            }
+            .font(.callout)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(.bar)
+        }
     }
 }
 

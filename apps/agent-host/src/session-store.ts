@@ -2,6 +2,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import { dirname, join } from "node:path";
 import type { AgentEvent } from "@agentide/agent-core";
 import type { Session } from "@agentide/shared-types";
+import { NotificationOutbox, type NotificationOutboxPage } from "./notification-outbox.js";
 
 interface StoredSessions {
   sessions: Session[];
@@ -14,6 +15,8 @@ interface ResolvedInteraction {
   sequence: number;
 }
 
+const notificationReconcileBatchSize = 256;
+
 export interface StoredSessionSnapshot {
   session: Session;
   events: AgentEvent[];
@@ -24,9 +27,38 @@ export class SessionStore {
   private data: StoredSessions | undefined;
   private loading: Promise<void> | undefined;
   private mutations: Promise<void> = Promise.resolve();
+  private notificationWrites: Promise<void> = Promise.resolve();
+  private notificationError: unknown;
+  private notificationNeedsRecovery = true;
+  private notificationRecoveryQueued = false;
+  private notificationAppendQueued = false;
+  private readonly pendingNotificationEvents = new Map<string, {
+    session: Session;
+    fromSequence: number;
+    throughSequence: number;
+  }>();
   private readonly eventWaiters = new Map<string, Set<(event: AgentEvent) => void>>();
 
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly notificationOutbox = new NotificationOutbox(`${filePath}.notifications.json`),
+  ) {}
+
+  async notificationPage(afterCursor?: number, limit?: number): Promise<NotificationOutboxPage> {
+    await this.flushNotifications();
+    return this.notificationOutbox.page(afterCursor, limit);
+  }
+
+  acknowledgeNotifications(cursor: number): Promise<void> {
+    return this.notificationOutbox.acknowledge(cursor);
+  }
+
+  async flushNotifications(): Promise<void> {
+    await this.load();
+    this.queueNotificationRecovery();
+    await this.notificationWrites;
+    if (this.notificationError !== undefined) throw this.notificationError;
+  }
 
   async list(projectId?: string): Promise<Session[]> {
     await this.mutations;
@@ -121,6 +153,7 @@ export class SessionStore {
       data.sessions = sessions;
       data.resolvedInteractions = resolvedInteractions;
       for (const notify of this.eventWaiters.get(sessionId) ?? []) notify(stored);
+      this.queueNotificationAppend(nextSession, stored);
     });
     this.mutations = result.then(() => undefined, () => undefined);
     await result;
@@ -193,10 +226,102 @@ export class SessionStore {
         events,
         resolvedInteractions,
       };
+      this.queueNotificationRecovery();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       this.data = { sessions: [], events: {}, resolvedInteractions: {} };
+      this.queueNotificationRecovery();
     }
+  }
+
+  private queueNotificationRecovery(): void {
+    if (!this.notificationNeedsRecovery || this.notificationRecoveryQueued) return;
+    this.notificationRecoveryQueued = true;
+    this.queueNotificationWrite(async () => {
+      try {
+        const data = this.data;
+        if (data === undefined) return;
+        for (const session of data.sessions) {
+          await this.reconcileNotificationRange(
+            session,
+            data.events[session.id] ?? [],
+            0,
+            data.events[session.id]?.length ?? 0,
+          );
+        }
+        this.notificationNeedsRecovery = false;
+        this.notificationError = undefined;
+      } finally {
+        this.notificationRecoveryQueued = false;
+      }
+    });
+  }
+
+  private queueNotificationAppend(session: Session, event: AgentEvent): void {
+    const pending = this.pendingNotificationEvents.get(session.id) ?? {
+      session: { ...session },
+      fromSequence: event.sequence,
+      throughSequence: event.sequence,
+    };
+    pending.session = { ...session };
+    pending.fromSequence = Math.min(pending.fromSequence, event.sequence);
+    pending.throughSequence = Math.max(pending.throughSequence, event.sequence);
+    this.pendingNotificationEvents.set(session.id, pending);
+    if (this.notificationAppendQueued) return;
+    this.queueNotificationAppendWork();
+  }
+
+  private queueNotificationAppendWork(): void {
+    if (this.notificationAppendQueued) return;
+    this.notificationAppendQueued = true;
+    this.queueNotificationWrite(async () => {
+      try {
+        await this.drainPendingNotificationEvents();
+      } finally {
+        this.notificationAppendQueued = false;
+        if (this.pendingNotificationEvents.size > 0) this.queueNotificationAppendWork();
+      }
+    });
+  }
+
+  private async drainPendingNotificationEvents(): Promise<void> {
+    while (this.pendingNotificationEvents.size > 0) {
+      const batch = new Map(this.pendingNotificationEvents);
+      this.pendingNotificationEvents.clear();
+      if (this.notificationNeedsRecovery) continue;
+      for (const [sessionId, values] of batch) {
+        const events = this.data?.events[sessionId] ?? [];
+        await this.reconcileNotificationRange(
+          values.session,
+          events,
+          values.fromSequence,
+          values.throughSequence + 1,
+        );
+      }
+    }
+  }
+
+  private async reconcileNotificationRange(
+    session: Session,
+    events: readonly AgentEvent[],
+    fromIndex: number,
+    throughIndex: number,
+  ): Promise<void> {
+    for (let index = fromIndex; index < throughIndex; index += notificationReconcileBatchSize) {
+      const batch = events.slice(index, Math.min(index + notificationReconcileBatchSize, throughIndex));
+      await this.notificationOutbox.reconcile([session], { [session.id]: batch });
+    }
+  }
+
+  private queueNotificationWrite(work: () => Promise<void>): void {
+    const attempt = this.notificationWrites.then(work);
+    this.notificationWrites = attempt.then(
+      () => undefined,
+      (error) => {
+        this.notificationError = error;
+        this.notificationNeedsRecovery = true;
+      },
+    );
   }
 
   private async mutate(operation: (data: StoredSessions) => Promise<void>): Promise<void> {

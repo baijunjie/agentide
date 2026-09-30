@@ -5,10 +5,12 @@ import UIKit
 struct MobileHomeView: View {
     @EnvironmentObject private var connection: MobileConnection
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @EnvironmentObject private var notifications: PushNotificationManager
     @State private var scanning = false
     @State private var confirmingUnpair = false
+    @State private var path: [String] = []
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             if connection.paired { projectList } else { pairingPrompt }
         }
         .sheet(isPresented: $scanning) {
@@ -28,6 +30,12 @@ struct MobileHomeView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(connection.unpairFailure ?? "")
+        }
+        .onChange(of: connection.pendingNotificationIntent) { openNotificationProjectIfPossible() }
+        .onChange(of: connection.projects.map(\.id)) { openNotificationProjectIfPossible() }
+        .onChange(of: connection.notificationNavigationRevision) { openNotificationProjectIfPossible() }
+        .onChange(of: connection.paired) { _, paired in
+            if !paired { path.removeAll() }
         }
     }
     private var unpairFailurePresented: Binding<Bool> {
@@ -70,12 +78,25 @@ struct MobileHomeView: View {
                     .foregroundStyle(.secondary)
                 Button("Unpair this iPhone", role: .destructive) { confirmingUnpair = true }
             }
+            if let notice = connection.notificationNotice {
+                Section { Text(notice).accessibilityIdentifier("notification-notice") }
+            }
+            if let registrationError = connection.notificationRegistrationError {
+                Section { Text("Notification registration: \(registrationError)").foregroundStyle(.red) }
+            }
         }
         .navigationTitle("Projects")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { connection.requestProjects() }
         .navigationDestination(for: String.self) { id in
             if let project = connection.projects.first(where: { $0.id == id }) { SessionListView(project: project) }
+        }
+        .toolbar {
+            NavigationLink { NotificationSettingsView(manager: notifications) } label: {
+                Image(systemName: "bell")
+            }
+            .accessibilityLabel("Notification settings")
+            .accessibilityIdentifier("notification-settings")
         }
     }
 
@@ -145,6 +166,14 @@ struct MobileHomeView: View {
         .navigationTitle("AgentIDE")
         .navigationBarTitleDisplayMode(.inline)
     }
+
+    private func openNotificationProjectIfPossible() {
+        guard let projectId = connection.notificationNavigationProjectId else { return }
+        if path.last != projectId { path.append(projectId) }
+        if connection.notificationOutcomeProjectId == projectId {
+            connection.consumeNotificationNavigationOutcome()
+        }
+    }
 }
 
 struct FileBrowserView: View {
@@ -188,6 +217,7 @@ struct FileBrowserContent: View {
     @State private var searchQuery = ""
     @State private var searchDebounce: Task<Void, Never>?
     @State private var locationError: String?
+    @FocusState private var searchFieldFocused: Bool
 
     init(project: RemoteProject, openText: @escaping (TextFileSelection) -> Void,
          openImage: @escaping (ImageFileSelection) -> Void) {
@@ -209,6 +239,7 @@ struct FileBrowserContent: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("file-search-field")
+                        .focused($searchFieldFocused)
                     if !searchQuery.isEmpty {
                         Button {
                             searchQuery = ""
@@ -355,9 +386,15 @@ struct FileBrowserContent: View {
             if entry.type == .directory {
                 Button { locateDirectory(entry.relativePath) } label: { label }
             } else if entry.isImage == true {
-                Button { openImage(.init(project: project, entry: entry)) } label: { label }
+                Button {
+                    searchFieldFocused = false
+                    openImage(.init(project: project, entry: entry))
+                } label: { label }
             } else if entry.isText == true {
-                Button { openText(.init(project: project, entry: entry)) } label: { label }
+                Button {
+                    searchFieldFocused = false
+                    openText(.init(project: project, entry: entry))
+                } label: { label }
             } else {
                 label
             }
@@ -382,6 +419,7 @@ struct FileBrowserContent: View {
     }
 
     private func locateDirectory(_ path: String) {
+        searchFieldFocused = false
         searchQuery = ""
         locationError = nil
         var prefixes: [String] = []

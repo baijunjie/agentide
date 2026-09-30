@@ -5,6 +5,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import type { Pool } from "pg";
+import type { NotificationPreferences, PushEnvironment } from "@agentide/protocol";
 
 export type DeviceKind = "mac" | "ios";
 export interface DeviceRecord {
@@ -21,6 +22,17 @@ export interface PairingSessionRecord {
   expiresAt: string;
   claimedAt?: string;
 }
+export interface PushTokenRecord {
+  deviceId: string;
+  token: string;
+  environment: PushEnvironment;
+  preferences: NotificationPreferences;
+  updatedAt: string;
+}
+export type NotificationDeliveryClaim =
+  | { kind: "claimed"; claimId: string }
+  | { kind: "processing" }
+  | { kind: "finalized" };
 export interface ControlPlaneStore {
   createDevice(device: DeviceRecord): Promise<void>;
   device(deviceId: string): Promise<DeviceRecord | undefined>;
@@ -33,12 +45,21 @@ export interface ControlPlaneStore {
   ): Promise<void>;
   pairedDeviceIds(deviceId: string): Promise<string[]>;
   revokeDevice(deviceId: string, revokedAt: string): Promise<void>;
+  savePushToken(token: PushTokenRecord): Promise<void>;
+  removePushTokens(deviceId: string): Promise<void>;
+  invalidatePushToken(token: string, environment: PushEnvironment): Promise<void>;
+  pushTokensForMac(macDeviceId: string): Promise<PushTokenRecord[]>;
+  claimNotificationDelivery(key: string, claimedAt: string, leaseExpiresAt: string, retentionCutoff: string): Promise<NotificationDeliveryClaim>;
+  finalizeNotificationDelivery(key: string, claimId: string, finalizedAt: string): Promise<void>;
+  releaseNotificationDelivery(key: string, claimId: string): Promise<void>;
 }
 
 export class InMemoryControlPlaneStore implements ControlPlaneStore {
   private readonly devices = new Map<string, DeviceRecord>();
   private readonly sessions = new Map<string, PairingSessionRecord>();
   private readonly bindings = new Set<string>();
+  private readonly pushTokens = new Map<string, PushTokenRecord>();
+  private readonly notificationDeliveries = new Map<string, { state: "processing" | "finalized"; claimId?: string; leaseExpiresAt?: string; updatedAt: string }>();
   async createDevice(device: DeviceRecord) {
     if (this.devices.has(device.id)) throw new Error("device_exists");
     this.devices.set(device.id, { ...device });
@@ -84,7 +105,49 @@ export class InMemoryControlPlaneStore implements ControlPlaneStore {
         const [mac, ios] = key.split("\0");
         if (mac === id || ios === id) this.bindings.delete(key);
       }
+      await this.removePushTokens(id);
     }
+  }
+  async savePushToken(token: PushTokenRecord) {
+    const existing = this.pushTokens.get(`${token.environment}\0${token.token}`);
+    if (existing !== undefined && existing.deviceId !== token.deviceId) throw new Error("push_token_in_use");
+    for (const [key, stored] of this.pushTokens) {
+      if (stored.deviceId === token.deviceId && stored.environment === token.environment) this.pushTokens.delete(key);
+    }
+    this.pushTokens.set(`${token.environment}\0${token.token}`, structuredClone(token));
+  }
+  async removePushTokens(deviceId: string) {
+    for (const [key, token] of this.pushTokens) if (token.deviceId === deviceId) this.pushTokens.delete(key);
+  }
+  async invalidatePushToken(token: string, environment: PushEnvironment) {
+    this.pushTokens.delete(`${environment}\0${token}`);
+  }
+  async pushTokensForMac(macDeviceId: string) {
+    const iosIds = new Set(await this.pairedDeviceIds(macDeviceId));
+    return [...this.pushTokens.values()].filter((token) => iosIds.has(token.deviceId)).map((token) => structuredClone(token));
+  }
+  async claimNotificationDelivery(key: string, claimedAt: string, leaseExpiresAt: string, retentionCutoff: string): Promise<NotificationDeliveryClaim> {
+    for (const [storedKey, delivery] of this.notificationDeliveries) {
+      if (delivery.state === "finalized" && delivery.updatedAt < retentionCutoff) this.notificationDeliveries.delete(storedKey);
+    }
+    const existing = this.notificationDeliveries.get(key);
+    if (existing?.state === "finalized") return { kind: "finalized" };
+    if (existing?.state === "processing" && existing.leaseExpiresAt !== undefined && existing.leaseExpiresAt > claimedAt) {
+      return { kind: "processing" };
+    }
+    const claimId = randomUUID();
+    this.notificationDeliveries.set(key, { state: "processing", claimId, leaseExpiresAt, updatedAt: claimedAt });
+    return { kind: "claimed", claimId };
+  }
+  async finalizeNotificationDelivery(key: string, claimId: string, finalizedAt: string) {
+    const current = this.notificationDeliveries.get(key);
+    if (current?.state === "processing" && current.claimId === claimId) {
+      this.notificationDeliveries.set(key, { state: "finalized", updatedAt: finalizedAt });
+    }
+  }
+  async releaseNotificationDelivery(key: string, claimId: string) {
+    const current = this.notificationDeliveries.get(key);
+    if (current?.state === "processing" && current.claimId === claimId) this.notificationDeliveries.delete(key);
   }
 }
 
@@ -95,6 +158,12 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
       CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('mac','ios')), token_hash TEXT NOT NULL, revoked_at TIMESTAMPTZ);
       CREATE TABLE IF NOT EXISTS pairing_sessions (id TEXT PRIMARY KEY, mac_device_id TEXT NOT NULL REFERENCES devices(id), secret_hash TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, claimed_at TIMESTAMPTZ);
       CREATE TABLE IF NOT EXISTS device_bindings (mac_device_id TEXT NOT NULL REFERENCES devices(id), ios_device_id TEXT NOT NULL REFERENCES devices(id), PRIMARY KEY (mac_device_id, ios_device_id));
+      CREATE TABLE IF NOT EXISTS push_tokens (device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE, token TEXT NOT NULL, environment TEXT NOT NULL CHECK (environment IN ('development','production')), preferences JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL, PRIMARY KEY (environment, token), UNIQUE (device_id, environment));
+      CREATE TABLE IF NOT EXISTS notification_deliveries (idempotency_key TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL, state TEXT NOT NULL DEFAULT 'finalized' CHECK (state IN ('processing','finalized')), claim_id UUID, lease_expires_at TIMESTAMPTZ, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+      ALTER TABLE notification_deliveries ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT 'finalized' CHECK (state IN ('processing','finalized'));
+      ALTER TABLE notification_deliveries ADD COLUMN IF NOT EXISTS claim_id UUID;
+      ALTER TABLE notification_deliveries ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+      ALTER TABLE notification_deliveries ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     `);
   }
   async createDevice(device: DeviceRecord) {
@@ -212,6 +281,7 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
         "DELETE FROM device_bindings WHERE mac_device_id=$1 OR ios_device_id=$1",
         [id],
       );
+      await client.query("DELETE FROM push_tokens WHERE device_id=$1", [id]);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -219,6 +289,72 @@ export class PostgresControlPlaneStore implements ControlPlaneStore {
     } finally {
       client.release();
     }
+  }
+  async savePushToken(token: PushTokenRecord) {
+    await this.pool.query(
+      `INSERT INTO push_tokens (device_id,token,environment,preferences,updated_at) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (device_id,environment) DO UPDATE SET token=EXCLUDED.token, preferences=EXCLUDED.preferences, updated_at=EXCLUDED.updated_at`,
+      [token.deviceId, token.token, token.environment, token.preferences, token.updatedAt],
+    );
+  }
+  async removePushTokens(deviceId: string) {
+    await this.pool.query("DELETE FROM push_tokens WHERE device_id=$1", [deviceId]);
+  }
+  async invalidatePushToken(token: string, environment: PushEnvironment) {
+    await this.pool.query("DELETE FROM push_tokens WHERE token=$1 AND environment=$2", [token, environment]);
+  }
+  async pushTokensForMac(macDeviceId: string) {
+    const result = await this.pool.query<{
+      device_id: string;
+      token: string;
+      environment: PushEnvironment;
+      preferences: NotificationPreferences;
+      updated_at: Date;
+    }>(
+      `SELECT p.device_id,p.token,p.environment,p.preferences,p.updated_at
+       FROM push_tokens p JOIN device_bindings b ON b.ios_device_id=p.device_id
+       JOIN devices d ON d.id=p.device_id
+       WHERE b.mac_device_id=$1 AND d.revoked_at IS NULL`,
+      [macDeviceId],
+    );
+    return result.rows.map((row) => ({
+      deviceId: row.device_id,
+      token: row.token,
+      environment: row.environment,
+      preferences: row.preferences,
+      updatedAt: row.updated_at.toISOString(),
+    }));
+  }
+  async claimNotificationDelivery(key: string, claimedAt: string, leaseExpiresAt: string, retentionCutoff: string): Promise<NotificationDeliveryClaim> {
+    await this.pool.query(
+      "DELETE FROM notification_deliveries WHERE state='finalized' AND updated_at<$1",
+      [retentionCutoff],
+    );
+    const claimId = randomUUID();
+    const result = await this.pool.query<{ state: "processing" | "finalized"; claim_id: string | null }>(
+      `INSERT INTO notification_deliveries (idempotency_key,created_at,state,claim_id,lease_expires_at,updated_at)
+       VALUES ($1,$2,'processing',$3,$4,$2)
+       ON CONFLICT (idempotency_key) DO UPDATE
+       SET state='processing',claim_id=EXCLUDED.claim_id,lease_expires_at=EXCLUDED.lease_expires_at,updated_at=EXCLUDED.updated_at
+       WHERE notification_deliveries.state='processing' AND notification_deliveries.lease_expires_at<=EXCLUDED.updated_at
+       RETURNING state,claim_id`,
+      [key, claimedAt, claimId, leaseExpiresAt],
+    );
+    if (result.rowCount === 1) return { kind: "claimed", claimId: result.rows[0]?.claim_id ?? claimId };
+    const existing = await this.pool.query<{ state: "processing" | "finalized" }>(
+      "SELECT state FROM notification_deliveries WHERE idempotency_key=$1",
+      [key],
+    );
+    return { kind: existing.rows[0]?.state ?? "processing" };
+  }
+  async finalizeNotificationDelivery(key: string, claimId: string, finalizedAt: string) {
+    await this.pool.query(
+      "UPDATE notification_deliveries SET state='finalized',claim_id=NULL,lease_expires_at=NULL,updated_at=$3 WHERE idempotency_key=$1 AND state='processing' AND claim_id=$2",
+      [key, claimId, finalizedAt],
+    );
+  }
+  async releaseNotificationDelivery(key: string, claimId: string) {
+    await this.pool.query("DELETE FROM notification_deliveries WHERE idempotency_key=$1 AND state='processing' AND claim_id=$2", [key, claimId]);
   }
 }
 

@@ -11,9 +11,10 @@
 - 常量与类型：`PROTOCOL_VERSION`、`MESSAGE_NAMESPACES`、`ProtocolVersion`、`MessageNamespace`、`MessageType`。
 - Envelope：`EnvelopeMetadata`、`Envelope`、`RequestEnvelope`、`ResponseEnvelope`、`ProtocolError`。
 - payload：`WirePayload`、`EncryptedPayload`。
+- 推送通知控制面：`NotificationCategory`、`NotificationIntent`、`NotificationPreferences`、`PushEnvironment`、`PushTokenRegistration`。
 - 校验器：`isMessageType()`、`isEncryptedPayload()`、`isEnvelope()`、`isProtocolTimestamp()`。
 
-`schema/` 提供 Envelope、响应、Agent 事件和共享业务对象的 Draft 2020-12 Schema，其中 Agent 事件 Schema 包含版本化结构报告，`project-search.schema.json` 约束项目文件搜索与取消请求，`git-changes.schema.json` 约束 Changes/Diff 请求响应及字段组合。Envelope、Agent 事件、结构化报告、项目文件搜索和 Git Changes/Diff 的正反例 `fixtures/` 同时被 TypeScript 与 Swift 测试消费，用于固定跨语言的接受与拒绝行为；其余共享业务对象目前只用正例 fixture 验证 Schema 与 Swift DTO 的共同解码。
+`schema/` 提供 Envelope、响应、Agent 事件和共享业务对象的 Draft 2020-12 Schema，其中 Agent 事件 Schema 包含版本化结构报告，`notifications.schema.json` 约束推送 token、偏好和最小通知意图，`project-search.schema.json` 约束项目文件搜索与取消请求，`git-changes.schema.json` 约束 Changes/Diff 请求响应及字段组合。Envelope、Agent 事件、结构化报告、项目文件搜索和 Git Changes/Diff 的正反例 `fixtures/` 同时被 TypeScript 与 Swift 测试消费，用于固定跨语言的接受与拒绝行为；推送通知对象使用共同 fixture 和正反例测试，其余共享业务对象目前只用正例 fixture 验证 Schema 与 Swift DTO 的共同解码。
 
 ### `AgentIDEProtocol`
 
@@ -22,7 +23,7 @@
 对外接口：
 
 - 协议封装：`ProtocolVersion`、`MessageType`、`Envelope`、`ResponseEnvelope`、`ProtocolError`、`WirePayload`、`EncryptedPayload`、`JSONValue`、`EmptyPayload`。
-- 共享对象：`AgentType`、`SessionStatus`、`Project`、`Session`、`FileEntry`、`ProjectSearchFilesRequest`、`ProjectCancelSearchRequest`、`ProjectSearchFilesResponse`、`GitChangeKind`、`GitChangeArea`、`GitChange`、`ProjectChangesResponse`、`ProjectDiffRequest`、`ProjectDiffResponse`。
+- 共享对象：`AgentType`、`SessionStatus`、`Project`、`Session`、`FileEntry`、`NotificationCategory`、`NotificationIntent`、`NotificationPreferences`、`PushEnvironment`、`PushTokenRegistration`、`NotificationOutboxItem`、`NotificationOutboxPage`、`ProjectSearchFilesRequest`、`ProjectCancelSearchRequest`、`ProjectSearchFilesResponse`、`GitChangeKind`、`GitChangeArea`、`GitChange`、`ProjectChangesResponse`、`ProjectDiffRequest`、`ProjectDiffResponse`。通知 outbox 类型只描述 Agent Host IPC 的页面数据；提交与确认策略由 macOS 模块负责。
 - Agent 事件：`AgentEvent`、14 个具体事件 DTO、`ApprovalAction` 与 `QuestionOption`；报告 DTO 包括 `ReportEvent`、`ReportPayload`、`TestReportPayload`、`PlanReportPayload`、`TodoReportPayload` 和 `DiagnosticsReportPayload` 及其条目类型。
 
 Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“显式 null”；未解释的 JSON payload 通过 `JSONValue` 往返，不能用普通 Swift 可选值吞掉显式 null。
@@ -39,6 +40,8 @@ Swift DTO 在 Envelope 和 Agent 事件的协议边界区分“缺失”和“�
 - `Project`：本地项目元数据与启用的 Agent。
 - `SessionStatus`、`Session`：统一会话状态与 Agent 原生会话标识。
 - `FileEntry`：项目内文件或目录的相对路径元数据。
+- `NotificationCategory`、`NotificationIntent`：等待用户、任务完成或失败的通知类别，以及只包含项目、会话和事件定位信息的通知意图。
+- `NotificationPreferences`、`PushEnvironment`、`PushTokenRegistration`：通知总开关与分类偏好、APNs 开发/生产环境和 token 登记对象。
 - `ProjectSearchFilesRequest`、`ProjectCancelSearchRequest`、`ProjectSearchFilesResponse`：项目文件搜索、取消关联和有界结果对象。
 - `GitChangeKind`、`GitChangeArea`、`GitChange`、`RenamedGitChange`、`NonRenamedGitChange`：工作树变更类型、区域和字段组合。
 - `ProjectChangesResponse`、`ProjectDiffRequest`、`ProjectDiffResponse`：项目 Changes 列表和受限统一 diff 的请求响应对象。

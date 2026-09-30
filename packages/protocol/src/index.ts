@@ -27,6 +27,14 @@ export interface EncryptedPayload {
 
 export type WirePayload<T> = T | EncryptedPayload;
 
+export type {
+  NotificationCategory,
+  NotificationIntent,
+  NotificationPreferences,
+  PushEnvironment,
+  PushTokenRegistration,
+} from "@agentide/shared-types";
+
 export interface EnvelopeMetadata {
   version: ProtocolVersion;
   id: string;

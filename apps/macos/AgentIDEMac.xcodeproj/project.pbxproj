@@ -11,6 +11,7 @@
 		A10000000000000000000015 /* MacViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* MacViews.swift */; };
 		A10000000000000000000017 /* MacSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* MacSupport.swift */; };
 		A10000000000000000000019 /* AgentHostSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001A /* AgentHostSupervisor.swift */; };
+		A1000000000000000000001D /* NotificationOutboxDrainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001C /* NotificationOutboxDrainer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -19,6 +20,7 @@
 		A10000000000000000000016 /* MacViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacViews.swift; sourceTree = "<group>"; };
 		A10000000000000000000018 /* MacSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSupport.swift; sourceTree = "<group>"; };
 		A1000000000000000000001A /* AgentHostSupervisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHostSupervisor.swift; sourceTree = "<group>"; };
+		A1000000000000000000001C /* NotificationOutboxDrainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationOutboxDrainer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -27,7 +29,7 @@
 
 /* Begin PBXGroup section */
 		A10000000000000000000007 = {isa = PBXGroup; children = (A10000000000000000000008 /* AgentIDEMac */, A10000000000000000000009 /* Products */,); sourceTree = "<group>"; };
-		A10000000000000000000008 /* AgentIDEMac */ = {isa = PBXGroup; children = (A10000000000000000000002 /* App.swift */, A1000000000000000000001A /* AgentHostSupervisor.swift */, A10000000000000000000016 /* MacViews.swift */, A10000000000000000000018 /* MacSupport.swift */,); path = AgentIDEMac; sourceTree = "<group>"; };
+		A10000000000000000000008 /* AgentIDEMac */ = {isa = PBXGroup; children = (A10000000000000000000002 /* App.swift */, A1000000000000000000001A /* AgentHostSupervisor.swift */, A10000000000000000000016 /* MacViews.swift */, A10000000000000000000018 /* MacSupport.swift */, A1000000000000000000001C /* NotificationOutboxDrainer.swift */,); path = AgentIDEMac; sourceTree = "<group>"; };
 		A10000000000000000000009 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000005 /* AgentIDEMac.app */,); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -59,7 +61,7 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* App.swift in Sources */, A10000000000000000000019 /* AgentHostSupervisor.swift in Sources */, A10000000000000000000015 /* MacViews.swift in Sources */, A10000000000000000000017 /* MacSupport.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
+		A1000000000000000000000C /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* App.swift in Sources */, A10000000000000000000019 /* AgentHostSupervisor.swift in Sources */, A10000000000000000000015 /* MacViews.swift in Sources */, A10000000000000000000017 /* MacSupport.swift in Sources */, A1000000000000000000001D /* NotificationOutboxDrainer.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */

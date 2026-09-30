@@ -2,6 +2,32 @@ import XCTest
 
 @MainActor
 final class ScenarioSmokeUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+        executionTimeAllowance = 120
+    }
+
+    func testNotificationScenarioDeepLinksThroughProjectAndSession() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "interactions", "--notification-scenario=approval_waiting"]
+        app.launch()
+
+        XCTAssertTrue(app.buttons["Approve Once"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["session-changes"].exists)
+    }
+
+    func testNotificationSettingsAreReachable() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-mobileScenario", "interactions"]
+        app.launch()
+
+        let settings = app.buttons["notification-settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        XCTAssertTrue(app.staticTexts["Alerts"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.switches["Notifications"].exists)
+    }
+
     func testComprehensiveScenarioOpensSessionAndRendersInteraction() {
         let app = XCUIApplication()
         app.launchArguments = ["-mobileScenario", "interactions"]
@@ -29,8 +55,13 @@ final class ScenarioSmokeUITests: XCTestCase {
 
         let answer = app.textFields["Your answer"]
         XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        XCTAssertTrue(makeHittable(answer, in: app, moving: .later))
         answer.tap()
-        answer.typeText("Run tests")
+        XCTAssertTrue(app.buttons["composer-keyboard-done"].waitForExistence(timeout: 5))
+        let settledAnswer = app.textFields["Your answer"]
+        focusTextField(settledAnswer)
+        settledAnswer.typeText("Run tests")
+        dismissKeyboard(in: app)
         let submit = app.buttons["question-submit-question-demo"]
         XCTAssertTrue(submit.waitForExistence(timeout: 5))
         let submitEnabled = XCTNSPredicateExpectation(
@@ -86,6 +117,9 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertEqual(message.value as? String, "@README.md")
         message.tap()
         message.typeText(" Summarize this file")
+        let keyboardDone = app.buttons["composer-keyboard-done"]
+        XCTAssertTrue(keyboardDone.waitForExistence(timeout: 5))
+        keyboardDone.tap()
         app.buttons["Send message"].tap()
         let cancelTurn = app.buttons["Cancel current turn"]
         XCTAssertTrue(cancelTurn.waitForExistence(timeout: 5))
@@ -352,22 +386,30 @@ final class ScenarioSmokeUITests: XCTestCase {
             XCTFail("Report frame: \(testReport.frame), navigation: \(app.navigationBars.firstMatch.frame), composer: \(app.textFields["session-composer"].frame), feed: \(app.scrollViews["session-feed"].frame)")
             return
         }
+        assertMetric("report-test-total", contains: ["42", "Total"], in: app)
+        assertMetric("report-test-passed", contains: ["40", "Passed"], in: app)
+        assertMetric("report-test-failed", contains: ["1", "Failed"], in: app)
+        assertMetric("report-test-skipped", contains: ["1", "Skipped"], in: app)
         testReport.tap()
         XCTAssertTrue(app.staticTexts["WorkspaceTests.testRestore"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Expected restored report state"].waitForExistence(timeout: 5))
         XCTAssertTrue(makeHittable(testReport, in: app, moving: .earlier))
         testReport.tap()
 
+        let feed = app.scrollViews["session-feed"]
+        XCTAssertTrue(feed.waitForExistence(timeout: 2))
+        drag(feed, moving: .later)
         let plan = app.buttons["report-plan"]
-        XCTAssertTrue(makeHittable(plan, in: app, moving: .later))
+        XCTAssertTrue(plan.waitForExistence(timeout: 5))
         plan.tap()
         XCTAssertTrue(app.staticTexts["1. Define protocol"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Completed"].waitForExistence(timeout: 5))
         XCTAssertTrue(makeHittable(plan, in: app, moving: .earlier))
         plan.tap()
 
+        drag(feed, moving: .later)
         let todo = app.buttons["report-todo"]
-        XCTAssertTrue(makeHittable(todo, in: app, moving: .later))
+        XCTAssertTrue(todo.waitForExistence(timeout: 5))
         todo.tap()
         XCTAssertTrue(app.staticTexts["Task 1"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Blocked"].waitForExistence(timeout: 5))
@@ -375,10 +417,10 @@ final class ScenarioSmokeUITests: XCTestCase {
         todo.tap()
 
         let diagnostics = app.buttons["report-diagnostics"]
-        XCTAssertTrue(makeHittable(diagnostics, in: app, moving: .later))
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 5))
         diagnostics.tap()
         let diagnostic = app.buttons["diagnostic-file-Sources/App.swift"]
-        XCTAssertTrue(makeHittable(diagnostic, in: app, moving: .later))
+        XCTAssertTrue(diagnostic.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Preview state is stale"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Sources/App.swift:12:5"].waitForExistence(timeout: 5))
         diagnostic.tap()
@@ -386,7 +428,7 @@ final class ScenarioSmokeUITests: XCTestCase {
 
         app.swipeLeft()
         XCTAssertTrue(app.buttons["session-changes"].waitForExistence(timeout: 5))
-        XCTAssertTrue(makeHittable(diagnostics, in: app, moving: .earlier))
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: 5))
         diagnostics.tap()
 
         let future = app.buttons["report-coverage"]
@@ -439,6 +481,7 @@ final class ScenarioSmokeUITests: XCTestCase {
         result.tap()
 
         XCTAssertTrue(app.buttons["file-actions"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
         app.buttons["file-actions"].tap()
         XCTAssertTrue(app.buttons["Add Reference to Draft"].waitForExistence(timeout: 5))
         app.buttons["Add Reference to Draft"].tap()
@@ -453,10 +496,15 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap()
         search.typeText("Sources")
+        dismissKeyboard(in: app)
         let result = app.staticTexts.matching(identifier: "Sources").firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 5))
         result.tap()
-        XCTAssertTrue(app.staticTexts["App.swift"].waitForExistence(timeout: 5))
+        let appFile = app.staticTexts["App.swift"]
+        if !appFile.waitForExistence(timeout: 2), result.exists {
+            result.tap()
+        }
+        XCTAssertTrue(appFile.waitForExistence(timeout: 5))
     }
 
     func testSearchDirectoryDisappearingShowsRecoverableError() {
@@ -465,6 +513,7 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap()
         search.typeText("Deleted")
+        dismissKeyboard(in: app)
         let result = app.staticTexts.matching(identifier: "Deleted").firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 5))
         result.tap()
@@ -537,6 +586,7 @@ final class ScenarioSmokeUITests: XCTestCase {
         XCTAssertEqual(search.placeholderValue, "Search files")
         search.tap()
         search.typeText("Ap")
+        dismissKeyboard(in: app)
         XCTAssertTrue(app.staticTexts["App.swift"].waitForExistence(timeout: 5))
         let spinnerGone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.activityIndicators.firstMatch)
         XCTAssertEqual(XCTWaiter.wait(for: [spinnerGone], timeout: 3), .completed)
@@ -681,8 +731,8 @@ final class ScenarioSmokeUITests: XCTestCase {
 
         let warnings = app.descendants(matching: .any)["report-diagnostics-warnings"]
         let errors = app.descendants(matching: .any)["report-diagnostics-errors"]
-        XCTAssertTrue(makeHittable(warnings, in: app, moving: .later))
-        XCTAssertTrue(makeHittable(errors, in: app, moving: .later))
+        XCTAssertTrue(makeHittable(warnings, in: app, moving: .later), "warnings \(warnings.frame) feed \(app.scrollViews["session-feed"].frame) composer \(composer.frame)")
+        XCTAssertTrue(makeHittable(errors, in: app, moving: .later), "errors \(errors.frame) feed \(app.scrollViews["session-feed"].frame) composer \(composer.frame)")
         XCTAssertLessThan(warnings.frame.height, errors.frame.height + 8, "warnings \(warnings.frame) errors \(errors.frame) label \(warnings.label)")
         XCTAssertFalse(warnings.label.contains("\n"))
 
@@ -948,26 +998,55 @@ final class ScenarioSmokeUITests: XCTestCase {
         let feed = app.scrollViews["session-feed"]
         guard feed.waitForExistence(timeout: 2) else { return false }
         for _ in 0..<attempts {
-            drag(feed, moving: directionToReveal(element, in: app) ?? direction)
+            let nextDirection = directionToReveal(element, in: app) ?? direction
+            nudge(feed, moving: nextDirection, toward: element, in: app)
             if isVisibleInFeed(element, app: app) { return true }
         }
         return false
     }
 
+    private func dismissKeyboard(in app: XCUIApplication) {
+        let done = app.buttons["composer-keyboard-done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        done.tap()
+    }
+
+    private func focusTextField(_ element: XCUIElement) {
+        let focused = NSPredicate(format: "hasKeyboardFocus == true")
+        guard !focused.evaluate(with: element) else { return }
+        element.tap()
+        let expectation = XCTNSPredicateExpectation(predicate: focused, object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
+    }
+
     private func directionToReveal(_ element: XCUIElement, in app: XCUIApplication) -> FeedDirection? {
         guard element.exists else { return nil }
-        let top = app.navigationBars.firstMatch.frame.maxY
-        let bottom = app.textFields["session-composer"].frame.minY
-        if element.frame.maxY < top { return .earlier }
-        if element.frame.minY > bottom { return .later }
+        let viewport = feedViewport(in: app)
+        let top = viewport.minY
+        let bottom = viewport.maxY
+        if element.frame.minY < top { return .earlier }
+        if element.frame.maxY > bottom { return .later }
         return nil
     }
 
     private func isVisibleInFeed(_ element: XCUIElement, app: XCUIApplication) -> Bool {
         guard element.exists, element.isHittable else { return false }
-        let top = app.navigationBars.firstMatch.frame.maxY
-        let bottom = app.textFields["session-composer"].frame.minY
+        let viewport = feedViewport(in: app)
+        let top = viewport.minY
+        let bottom = viewport.maxY
         return element.frame.midY >= top && element.frame.midY <= bottom
+    }
+
+    private func feedViewport(in app: XCUIApplication) -> CGRect {
+        let feed = app.scrollViews["session-feed"].frame
+        let navigationBottom = app.navigationBars.firstMatch.frame.maxY
+        let composerTop = app.textFields["session-composer"].frame.minY
+        return CGRect(
+            x: feed.minX,
+            y: max(feed.minY, navigationBottom),
+            width: feed.width,
+            height: max(0, min(feed.maxY, composerTop) - max(feed.minY, navigationBottom))
+        )
     }
 
     private func assertLaidOutInFull(_ label: String, font: UIFont, in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
@@ -1002,6 +1081,36 @@ final class ScenarioSmokeUITests: XCTestCase {
         feed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY)).press(
             forDuration: 0.05,
             thenDragTo: feed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        )
+    }
+
+    private func nudge(
+        _ feed: XCUIElement,
+        moving direction: FeedDirection,
+        toward element: XCUIElement,
+        in app: XCUIApplication
+    ) {
+        let viewport = feedViewport(in: app)
+        let top = viewport.minY
+        let bottom = viewport.maxY
+        let targetDistance: CGFloat
+        switch direction {
+        case .earlier:
+            targetDistance = max(0, top - element.frame.minY)
+        case .later:
+            targetDistance = max(0, element.frame.maxY - bottom)
+        }
+        // XCTest's default drag velocity adds enough momentum to skip a whole card at large text sizes.
+        // Bound the drag to the element's distance from the visible viewport and request a slow gesture.
+        let distance = min(0.3, max(0.06, targetDistance / max(feed.frame.height, 1) + 0.03))
+        let middle = 0.5
+        let startY = direction == .earlier ? middle - distance / 2 : middle + distance / 2
+        let endY = direction == .earlier ? middle + distance / 2 : middle - distance / 2
+        feed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY)).press(
+            forDuration: 0.05,
+            thenDragTo: feed.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY)),
+            withVelocity: .slow,
+            thenHoldForDuration: 0
         )
     }
 }

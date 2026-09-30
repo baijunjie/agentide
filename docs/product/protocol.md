@@ -4,7 +4,7 @@ macOS、iOS、Relay Server 与 Agent Host 通过同一套版本化 JSON 契约�
 
 ## Envelope v1
 
-所有请求和异步推送都使用 `Envelope`。固定元数据如下：
+已绑定设备之间经 Relay 路由的业务请求和异步推送都使用 `Envelope`。独立 HTTP 控制面对象不封装为 Envelope。固定元数据如下：
 
 | 字段 | 约束 |
 | --- | --- |
@@ -92,6 +92,17 @@ Adapter 类型只能是 `claude` 或 `codex`。上层以统一会话 ID 调用 A
 
 Claude 与 Codex 的现行能力、会话恢复以及统一事件的持久化和远程投递规则见 [Agent 会话执行与事件投递](agent-sessions.md)。
 
+## 推送通知控制面对象
+
+推送 token 登记与通知意图使用独立的鉴权 HTTP 控制面 JSON，不封装为 Envelope。相关对象拒绝未知字段：
+
+- `NotificationCategory` 固定为 `approval_waiting`、`question_waiting`、`task_completed` 或 `task_failed`。
+- `NotificationPreferences` 包含总开关 `enabled`、等待类开关 `waitingEnabled` 和完成类开关 `completionEnabled`。
+- `PushTokenRegistration` 包含长度可变的 APNs device token、`development` 或 `production` 环境以及完整偏好。`token` 必须保留系统返回的全部 token 字节，以 2 至 512 个偶数长度的 ASCII 十六进制字符编码（1 至 256 字节），不能截断或假设固定 32 字节。
+- `NotificationIntent` 只包含非空 `projectId`、非空 `sessionId`、范围为 0 至 `9007199254740991` 的整数 `sequence`、通知类别、各不超过 200 个 Unicode 标量的非空 `projectName` 与 `sessionTitle`，以及 UTC 时间戳 `createdAt`。它不允许携带消息正文、命令、工具输入输出或报告内容。
+
+这些对象由 TypeScript 类型、`notifications.schema.json`、Swift `Codable` DTO 和共同 fixture 固定跨语言接受边界。类别如何从事件产生、Relay 如何过滤和投递、iPhone 如何呈现与导航，见 [Agent 会话推送通知](push-notifications.md)。
+
 ## 共享业务对象
 
 - `Project` 保存稳定标识、显示名、本机根路径、创建时间和启用的 Agent 类型。根路径属于 Mac 本地项目模型。
@@ -102,4 +113,4 @@ Claude 与 Codex 的现行能力、会话恢复以及统一事件的持久化和
 - `ProjectChangesResponse` 以 `isGitRepository` 区分非 Git 项目与 Git 工作树，并返回 `GitChange` 列表；非 Git 项目的列表必须为空。`ProjectDiffRequest` 只包含项目内相对路径和变更区域。`ProjectDiffResponse` 回显对应变更并可携带统一 diff；二进制变更禁止携带 `diff`。
 - `SessionSnapshot` 是远程客户端恢复会话的一致视图：`session` 和 `currentStatus` 给出同一时点的会话状态，`recentEvents` 包含最近最多 200 条持久化事件，`pendingInteractions` 单独列出仍待回应的审批与问题，`latestSequence` 是完整持久化事件流的最新序列号（空流为 `-1`）。最新序列号可以高于 `recentEvents` 窗口的首条序列号，客户端不应把该窗口当作完整历史。
 
-Envelope 与 `AgentEvent` 由 TypeScript 运行时校验器、Draft 2020-12 JSON Schema 和 Swift `Codable` DTO 共同消费正反例 fixtures，以固定各自可表达边界内的跨语言接受与拒绝行为；Schema 无法表达的跨字段语义另用运行时反例 fixture 固定。`Project`、`Session`、`FileEntry`、项目文件搜索和 Git Changes/Diff 对象当前只有 TypeScript 静态类型、JSON Schema 与 Swift DTO，没有独立的 TypeScript 运行时守卫；前三者以正例 fixture 验证共同解码，项目文件搜索、Git Changes/Diff 对象与 `SessionSnapshot` 同时使用正反例 fixtures 验证字段组合和拒绝边界。协议字段、枚举或可选值语义变化时，相关类型、Schema、DTO 与覆盖该边界的 fixtures 必须同步更新。
+Envelope 与 `AgentEvent` 由 TypeScript 运行时校验器、Draft 2020-12 JSON Schema 和 Swift `Codable` DTO 共同消费正反例 fixtures，以固定各自可表达边界内的跨语言接受与拒绝行为；Schema 无法表达的跨字段语义另用运行时反例 fixture 固定。`Project`、`Session`、`FileEntry`、项目文件搜索和 Git Changes/Diff 对象当前只有 TypeScript 静态类型、JSON Schema 与 Swift DTO，没有独立的 TypeScript 运行时守卫；前三者以正例 fixture 验证共同解码，项目文件搜索、Git Changes/Diff 对象与 `SessionSnapshot` 同时使用正反例 fixtures 验证字段组合和拒绝边界。通知控制面对象还在 Relay HTTP 入口执行等价的严格运行时校验，并以共同 fixture 和正反例测试固定边界。协议字段、枚举或可选值语义变化时，相关类型、Schema、DTO、入口校验与覆盖该边界的 fixtures 必须同步更新。

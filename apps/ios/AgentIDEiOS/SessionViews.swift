@@ -1,5 +1,6 @@
 import AgentIDEProtocol
 import SwiftUI
+import UIKit
 
 enum WorkspaceChangesRestore {
     static func needsRefresh(for level: WorkspaceLevel) -> Bool {
@@ -128,6 +129,9 @@ struct SessionListView: View {
             if let selectedSession { AgentSessionView(project: project, session: selectedSession) }
         }
         .task { connection.requestSessions(projectId: project.id) }
+        .onChange(of: connection.sessions[project.id]?.map(\.id) ?? []) { openNotificationSessionIfPossible() }
+        .onChange(of: connection.pendingNotificationIntent) { openNotificationSessionIfPossible() }
+        .onChange(of: connection.notificationNavigationRevision) { openNotificationSessionIfPossible() }
         .onChange(of: connection.createdSession?.id) {
             guard let session = connection.createdSession, session.projectId == project.id else { return }
             creating = false
@@ -141,6 +145,24 @@ struct SessionListView: View {
         if !connection.online { return "You can create a session when your Mac is online." }
         if project.enabledAgents.isEmpty { return "This project has no agent enabled." }
         return nil
+    }
+
+    private func openNotificationSessionIfPossible() {
+        guard let intent = connection.pendingNotificationIntent, intent.projectId == project.id else { return }
+        guard connection.notificationReadyProjectId == project.id else { return }
+        guard let session = connection.sessions[project.id]?.first(where: { $0.id == intent.sessionId }) else {
+            if !connection.loadingSessionProjects.contains(project.id), connection.sessions[project.id] != nil {
+                connection.clearPendingNotification(message: "The notification target is no longer available. Showing this project's sessions instead.")
+            }
+            return
+        }
+        if intent.category.isWaiting, session.status != .waitingUser {
+            connection.clearPendingNotification(message: "That request has already been resolved. Showing this project's sessions instead.")
+            return
+        }
+        selectedSession = session
+        showingSession = true
+        connection.clearPendingNotification()
     }
 }
 
@@ -267,7 +289,7 @@ private struct AgentSessionView: View {
 
     var body: some View {
         WorkspaceNavigationContainer(navigation: $workspace) { _ in
-            sessionContent
+            sessionContent()
         } browserContent: {
             FileBrowserContent(
                 project: project,
@@ -330,6 +352,18 @@ private struct AgentSessionView: View {
                         .accessibilityIdentifier("session-changes")
                 }
             }
+            if workspace.level == .session {
+                ToolbarItem(placement: .principal) { StatusBadge(status: status) }
+            }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+                    )
+                }
+                    .accessibilityIdentifier("composer-keyboard-done")
+            }
         }
         .fullScreenCover(item: $workspace.fullScreenImage) {
             ImageViewer(selection: $0, sendToAgent: addReferenceToDraft)
@@ -357,7 +391,7 @@ private struct AgentSessionView: View {
         }
     }
 
-    private var sessionContent: some View {
+    private func sessionContent() -> some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
@@ -1057,5 +1091,3 @@ enum ToolSummary {
         return String(text[..<end]) + "…"
     }
 }
-
-

@@ -26,6 +26,7 @@ final class MacConnection: ObservableObject {
     struct FileContent: Decodable { let content: String }
     struct SessionList: Decodable { let sessions: [Session] }
     struct EventList: Decodable { let events: [AgentEvent] }
+    private struct NotificationAcceptance: Decodable { let accepted: Bool }
     private struct HostSearchRequest: Encodable { let searchId: String; let query: String; let limit: Int }
     private struct HostSearchResponse: Decodable { let query: String; let results: [FileEntry]; let hasMore: Bool }
 
@@ -34,6 +35,8 @@ final class MacConnection: ObservableObject {
     @Published var devices: [Device] = []
     @Published var projects: [Project] = []
     @Published var error: String?
+    @Published private(set) var notificationOutboxOverflow: String?
+    @Published private(set) var notificationDeliveryError: String?
     @Published var connectionState = "Offline"
     private let deviceId: String
     private var token: String?
@@ -45,6 +48,7 @@ final class MacConnection: ObservableObject {
     private var sessionStreamGenerations: [EventStreamKey: Int] = [:]
     private var fileSearchTasks: [FileSearchKey: Task<Void, Never>] = [:]
     private var fileSearchTokens: [FileSearchKey: UUID] = [:]
+    private var notificationDrainTask: Task<Void, Never>?
     private let agentHost = AgentHostSupervisor()
 
     init() {
@@ -53,7 +57,7 @@ final class MacConnection: ObservableObject {
         token = CredentialStore.token(for: server)
         Task { [weak self] in
             await self?.refreshProjects()
-            if self?.token != nil { self?.connect(); await self?.refreshDevices() }
+            if self?.token != nil { self?.connect(); self?.startNotificationDrain(); await self?.refreshDevices() }
         }
     }
 
@@ -68,7 +72,7 @@ final class MacConnection: ObservableObject {
                 token = registration.token; CredentialStore.save(registration.token, for: server)
             }
             pairing = try await relayRequest("/pairing/sessions", method: "POST", body: [String: String](), authenticated: true)
-            connect(); await refreshDevices()
+            connect(); startNotificationDrain(); await refreshDevices()
         } catch { self.error = error.localizedDescription }
     }
 
@@ -101,6 +105,10 @@ final class MacConnection: ObservableObject {
         catch { self.error = error.localizedDescription }
     }
 
+    func clearNotificationOutboxOverflow() {
+        notificationOutboxOverflow = nil
+    }
+
     func refreshProjects() async {
         do { projects = try await loadProjects() }
         catch { self.error = "Agent Host: \(error.localizedDescription)" }
@@ -117,6 +125,58 @@ final class MacConnection: ObservableObject {
             self.connectionState = error == nil ? "Connected" : "Offline"
         } }
         receive(task)
+        startNotificationDrain()
+    }
+
+    private func startNotificationDrain() {
+        guard notificationDrainTask == nil, token != nil else { return }
+        notificationDrainTask = Task { [weak self] in
+            defer { self?.notificationDrainTask = nil }
+            while !Task.isCancelled {
+                guard let self else { return }
+                do {
+                    let page: NotificationOutboxPage = try await self.hostRequest(
+                        "/notifications/outbox?limit=50",
+                        method: "GET",
+                        body: Optional<String>.none
+                    )
+                    var diagnostics = NotificationOutboxDiagnostics(
+                        overflow: self.notificationOutboxOverflow,
+                        deliveryError: self.notificationDeliveryError
+                    )
+                    diagnostics.record(page: page)
+                    self.notificationOutboxOverflow = diagnostics.overflow
+                    if page.items.isEmpty {
+                        diagnostics.recordSuccessfulDrain()
+                        self.notificationDeliveryError = diagnostics.deliveryError
+                        try? await Task.sleep(for: .seconds(2))
+                        continue
+                    }
+                    let projects = try await self.loadProjects()
+                    let names = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0.name) })
+                    try await NotificationOutboxDrainer().drain(
+                        page: page,
+                        projectNames: names,
+                        submit: { intent in
+                            try Task.checkCancellation()
+                            return try await self.submitNotificationIntent(intent)
+                        },
+                        acknowledge: { cursor in
+                            let _: EmptyResponse = try await self.hostRequest(
+                                "/notifications/outbox/ack", method: "POST", body: ["cursor": cursor]
+                            )
+                        }
+                    )
+                    diagnostics.recordSuccessfulDrain()
+                    self.notificationDeliveryError = diagnostics.deliveryError
+                } catch is CancellationError {
+                    return
+                } catch {
+                    self.notificationDeliveryError = error.localizedDescription
+                    try? await Task.sleep(for: .seconds(5))
+                }
+            }
+        }
     }
 
     private func receive(_ task: URLSessionWebSocketTask) {
@@ -590,6 +650,26 @@ final class MacConnection: ObservableObject {
         if let body { request.httpBody = try JSONEncoder().encode(body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         if authenticated, let token { request.setValue(deviceId, forHTTPHeaderField: "X-Device-Id"); request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         return try await perform(request)
+    }
+
+    private func submitNotificationIntent(_ intent: NotificationIntent) async throws -> NotificationDeliveryResponse {
+        guard let base = URL(string: server), let url = URL(string: "/notifications/intents", relativeTo: base) else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(intent)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token {
+            request.setValue(deviceId, forHTTPHeaderField: "X-Device-Id")
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard 200..<300 ~= http.statusCode else {
+            let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+            throw NSError(domain: "AgentIDE", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: errorResponse?.error ?? "Request failed"])
+        }
+        let acceptance = try JSONDecoder().decode(NotificationAcceptance.self, from: data)
+        return NotificationDeliveryResponse(statusCode: http.statusCode, accepted: acceptance.accepted)
     }
 
     private func hostRequest<Response: Decodable, Body: Encodable>(_ path: String, method: String, body: Body?) async throws -> Response {

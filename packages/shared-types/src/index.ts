@@ -107,3 +107,33 @@ export interface BinaryProjectDiffResponse {
 }
 
 export type ProjectDiffResponse = TextProjectDiffResponse | BinaryProjectDiffResponse;
+
+export type NotificationCategory =
+  | "approval_waiting"
+  | "question_waiting"
+  | "task_completed"
+  | "task_failed";
+
+export interface NotificationIntent {
+  projectId: string;
+  sessionId: string;
+  sequence: number;
+  category: NotificationCategory;
+  projectName: string;
+  sessionTitle: string;
+  createdAt: string;
+}
+
+export interface NotificationPreferences {
+  enabled: boolean;
+  waitingEnabled: boolean;
+  completionEnabled: boolean;
+}
+
+export type PushEnvironment = "development" | "production";
+
+export interface PushTokenRegistration {
+  token: string;
+  environment: PushEnvironment;
+  preferences: NotificationPreferences;
+}

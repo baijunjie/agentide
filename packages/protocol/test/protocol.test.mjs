@@ -55,6 +55,7 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   const sharedSchema = await readJson(schemaUrl("shared-types"));
   const gitChangesSchema = await readJson(schemaUrl("git-changes"));
   const projectSearchSchema = await readJson(schemaUrl("project-search"));
+  const notificationSchema = await readJson(schemaUrl("notifications"));
   ajv.addSchema(sharedSchema);
   const validateSessionSnapshot = ajv.compile(await readJson(schemaUrl("session-snapshot")));
   const validateProject = ajv.getSchema(`${sharedSchema.$id}#/$defs/project`);
@@ -62,6 +63,9 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
   const validateFileEntry = ajv.getSchema(`${sharedSchema.$id}#/$defs/fileEntry`);
   ajv.addSchema(gitChangesSchema);
   ajv.addSchema(projectSearchSchema);
+  ajv.addSchema(notificationSchema);
+  const validateNotificationIntent = ajv.compile({ $ref: `${notificationSchema.$id}#/$defs/intent` });
+  const validatePushTokenRegistration = ajv.compile({ $ref: `${notificationSchema.$id}#/$defs/tokenRegistration` });
   const validateGitChange = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/gitChange` });
   const validateProjectChangesRequest = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectChangesRequest` });
   const validateProjectChangesResponse = ajv.compile({ $ref: `${gitChangesSchema.$id}#/$defs/projectChangesResponse` });
@@ -221,6 +225,23 @@ test("runtime and Draft 2020-12 schema agree on envelope fixtures", async () => 
     ...projectSearch.projectSearchFilesResponse,
     results: Array.from({ length: 101 }, () => projectSearch.projectSearchFilesResponse.results[0]),
   }), false);
+
+  const notifications = await readJson(fixtureUrl("notifications"));
+  assert.equal(validateNotificationIntent(notifications.intent), true, JSON.stringify(validateNotificationIntent.errors));
+  assert.equal(validatePushTokenRegistration(notifications.tokenRegistration), true, JSON.stringify(validatePushTokenRegistration.errors));
+  assert.equal(validateNotificationIntent({ ...notifications.intent, source: "/Users/example/secret.ts" }), false);
+  assert.equal(validateNotificationIntent({ ...notifications.intent, sequence: Number.MAX_SAFE_INTEGER }), true);
+  assert.equal(validateNotificationIntent({ ...notifications.intent, sequence: Number.MAX_SAFE_INTEGER + 1 }), false);
+  assert.equal(validateNotificationIntent({ ...notifications.intent, projectName: "😀".repeat(200) }), true);
+  assert.equal(validateNotificationIntent({ ...notifications.intent, projectName: "😀".repeat(201) }), false);
+  assert.equal(validatePushTokenRegistration({ ...notifications.tokenRegistration, environment: "sandbox" }), false);
+  assert.equal(validatePushTokenRegistration({ ...notifications.tokenRegistration, token: notifications.nonStandardToken }), true);
+  assert.equal(validatePushTokenRegistration({ ...notifications.tokenRegistration, token: "A".repeat(512) }), true);
+  assert.equal(validatePushTokenRegistration({ ...notifications.tokenRegistration, token: "A".repeat(514) }), false);
+  assert.equal(validatePushTokenRegistration({ ...notifications.tokenRegistration, token: "A".repeat(63) }), false);
+  for (const token of notifications.invalidTokens) {
+    assert.equal(validatePushTokenRegistration({ ...notifications.tokenRegistration, token }), false);
+  }
 
   assert.equal(
     validateSessionSnapshot(await readJson(fixtureUrl("session-snapshot"))),

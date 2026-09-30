@@ -9,6 +9,8 @@ export {
 export { FileSearchError, LocalFileService, type FileSearchLimits } from "./file-service.js";
 export { LocalGitService, GitServiceError, type GitArea } from "./git-service.js";
 export { createAgentHostServer, FileSearchTasks } from "./ipc-server.js";
+export { NotificationOutbox } from "./notification-outbox.js";
+export type { NotificationOutboxItem, NotificationOutboxPage } from "./notification-outbox.js";
 export { ProjectStore } from "./project-store.js";
 export { SessionManager, type CreateManagedSession } from "./session-manager.js";
 export { SessionStore } from "./session-store.js";

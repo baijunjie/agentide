@@ -2,6 +2,8 @@ import AgentIDEProtocol
 import SwiftUI
 import UIKit
 
+private let minimumNavigationClearance: CGFloat = 120
+
 enum WorkspaceLevel: Codable, Equatable {
     case session
     case browser
@@ -87,13 +89,17 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
     @ViewBuilder let changesContent: () -> ChangesContent
     @ViewBuilder let diffContent: (GitChange) -> DiffContent
     @State private var dragTranslation: CGFloat = 0
-    @State private var navigationInset: CGFloat = 0
+    // UIKit measurement arrives after the first SwiftUI layout. Reserve compact navigation chrome
+    // so the first feed item is not mounted underneath it during that initial pass.
+    @State private var navigationInset: CGFloat = minimumNavigationClearance
 
     var body: some View {
         GeometryReader { geometry in
-            let width = geometry.size.width
+            let width = geometry.size.width.isFinite ? max(0, geometry.size.width) : 0
+            let height = geometry.size.height.isFinite ? max(0, geometry.size.height) : 0
             let depth = interactiveDepth(width: width)
             let inactiveInset = inactiveLayerWidth(width)
+            let inactiveWidth = max(0, width - inactiveInset)
 
             ZStack(alignment: .leading) {
                 sessionContent(navigationInset)
@@ -102,14 +108,14 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
                     .accessibilityHidden(navigation.level != .session)
 
                 browserContent()
-                    .frame(width: width - inactiveInset)
+                    .frame(width: inactiveWidth)
                     .background(Color(.systemBackground))
                     .workspaceLayer(sideStyle(.browser, depth: depth, width: width, inactiveInset: inactiveInset))
                     .allowsHitTesting(navigation.level == .browser)
                     .accessibilityHidden(navigation.level != .browser)
 
                 changesContent()
-                    .frame(width: width - inactiveInset)
+                    .frame(width: inactiveWidth)
                     .background(Color(.systemBackground))
                     .workspaceLayer(sideStyle(.changes, depth: depth, width: width, inactiveInset: inactiveInset))
                     .allowsHitTesting(navigation.level == .changes)
@@ -117,7 +123,7 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
 
                 if let selection = navigation.presentedFile {
                     fileContent(selection)
-                        .frame(width: width - inactiveInset)
+                        .frame(width: inactiveWidth)
                         .background(Color(.systemBackground))
                         .workspaceLayer(fileStyle(depth: depth, width: width, inactiveInset: inactiveInset))
                         .allowsHitTesting(navigation.level == .file(selection))
@@ -125,7 +131,7 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
                 }
                 if let change = navigation.presentedChange {
                     diffContent(change)
-                        .frame(width: width - inactiveInset)
+                        .frame(width: inactiveWidth)
                         .background(Color(.systemBackground))
                         .workspaceLayer(fileStyle(depth: depth, width: width, inactiveInset: inactiveInset))
                         .allowsHitTesting(navigation.level == .diff(change))
@@ -135,7 +141,7 @@ struct WorkspaceNavigationContainer<SessionContent: View, BrowserContent: View, 
                 retiredLayerReturnArea(width: inactiveInset)
                 fileReturnHandle(width: width)
             }
-            .frame(width: width, height: geometry.size.height, alignment: .leading)
+            .frame(width: width, height: height, alignment: .leading)
             .environment(\.workspaceNavigationInset, navigationInset)
             .clipped()
             .contentShape(Rectangle())
@@ -381,8 +387,15 @@ private final class NavigationClearanceView: UIView {
             scheduleRetry()
             return
         }
-        // GeometryReader lays the workspace out from the window origin, beneath NavigationStack chrome.
-        let value = max(0, navigationBar.convert(navigationBar.bounds, to: window).maxY)
+        // Measure in the workspace's coordinate space. Scene and keyboard transitions can move the
+        // window origin, so using the bar's absolute window position would reserve that offset twice.
+        let navigationBottom = navigationBar.convert(navigationBar.bounds, to: window).maxY
+        let workspaceTop = convert(bounds, to: window).minY
+        let value = max(minimumNavigationClearance, navigationBottom - workspaceTop)
+        guard value.isFinite else {
+            scheduleRetry()
+            return
+        }
         if abs(lastValue - value) > 0.5 {
             lastValue = value
             DispatchQueue.main.async { [weak self] in self?.onChange?(value) }

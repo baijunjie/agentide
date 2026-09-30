@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentide.local/schema/notifications.schema.json",
+  "$defs": {
+    "category": {
+      "enum": ["approval_waiting", "question_waiting", "task_completed", "task_failed"]
+    },
+    "preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "waitingEnabled", "completionEnabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "waitingEnabled": { "type": "boolean" },
+        "completionEnabled": { "type": "boolean" }
+      }
+    },
+    "tokenRegistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token", "environment", "preferences"],
+      "properties": {
+        "token": { "type": "string", "pattern": "^(?:[0-9A-Fa-f]{2}){1,256}$" },
+        "environment": { "enum": ["development", "production"] },
+        "preferences": { "$ref": "#/$defs/preferences" }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "sessionId", "sequence", "category", "projectName", "sessionTitle", "createdAt"],
+      "properties": {
+        "projectId": { "type": "string", "minLength": 1 },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "sequence": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "category": { "$ref": "#/$defs/category" },
+        "projectName": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "sessionTitle": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

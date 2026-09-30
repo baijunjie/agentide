@@ -3,19 +3,24 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { isEnvelope } from "@agentide/protocol";
+import { createHash } from "node:crypto";
+import { isEnvelope, isProtocolTimestamp, type NotificationIntent, type NotificationPreferences, type PushEnvironment } from "@agentide/protocol";
 import {
   ControlPlane,
   InMemoryControlPlaneStore,
   type ControlPlaneStore,
 } from "./control-plane.js";
 import { DeviceRelay } from "./relay.js";
+import { type APNsProvider, UnavailableAPNsProvider } from "./apns-provider.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const NOTIFICATION_LEASE_MS = 60_000;
+const NOTIFICATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 export interface RelayServerOptions {
   store?: ControlPlaneStore;
   publicUrl?: string;
   now?: () => Date;
+  apnsProvider?: APNsProvider;
 }
 export function createRelayServer(options: RelayServerOptions = {}) {
   const control = new ControlPlane(
@@ -23,6 +28,7 @@ export function createRelayServer(options: RelayServerOptions = {}) {
     options.now,
   );
   const relay = new DeviceRelay(control);
+  const apns = options.apnsProvider ?? new UnavailableAPNsProvider();
   const server = createServer(async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/health")
@@ -47,6 +53,12 @@ export function createRelayServer(options: RelayServerOptions = {}) {
         return await revoke(request, response, control, relay);
       if (request.method === "POST" && request.url === "/relay")
         return await acceptEnvelope(request, response);
+      if (request.method === "PUT" && request.url === "/notifications/token")
+        return await registerPushToken(request, response, control);
+      if (request.method === "DELETE" && request.url === "/notifications/token")
+        return await removePushToken(request, response, control);
+      if (request.method === "POST" && request.url === "/notifications/intents")
+        return await acceptNotificationIntent(request, response, control, apns, options.now ?? (() => new Date()));
       send(response, 404, { error: "not_found" });
     } catch (error) {
       const status =
@@ -67,6 +79,82 @@ export function createRelayServer(options: RelayServerOptions = {}) {
   });
   relay.attach(server);
   return server;
+}
+
+async function registerPushToken(
+  request: IncomingMessage,
+  response: ServerResponse,
+  control: ControlPlane,
+) {
+  const auth = await authenticate(request, control);
+  if (auth?.kind !== "ios") return send(response, 401, { error: "unauthorized" });
+  const body = await readJson(request);
+  if (!isPushTokenRegistration(body)) return send(response, 400, { error: "invalid_push_token" });
+  await control.store.savePushToken({ deviceId: auth.id, ...body, updatedAt: new Date().toISOString() });
+  send(response, 204, undefined);
+}
+
+async function removePushToken(
+  request: IncomingMessage,
+  response: ServerResponse,
+  control: ControlPlane,
+) {
+  const auth = await authenticate(request, control);
+  if (auth?.kind !== "ios") return send(response, 401, { error: "unauthorized" });
+  await control.store.removePushTokens(auth.id);
+  send(response, 204, undefined);
+}
+
+async function acceptNotificationIntent(
+  request: IncomingMessage,
+  response: ServerResponse,
+  control: ControlPlane,
+  apns: APNsProvider,
+  now: () => Date,
+) {
+  const auth = await authenticate(request, control);
+  if (auth?.kind !== "mac") return send(response, 401, { error: "unauthorized" });
+  const body = await readJson(request);
+  if (!isNotificationIntent(body)) return send(response, 400, { error: "invalid_notification_intent" });
+  const tokens = (await control.store.pushTokensForMac(auth.id)).filter((token) => allows(token.preferences, body.category));
+  let transientFailure = false;
+  let rateLimited = false;
+  let delivered = 0;
+  for (const token of tokens) {
+    const key = createHash("sha256").update(JSON.stringify([
+      auth.id, token.deviceId, body.sessionId, body.sequence, body.category,
+    ])).digest("hex");
+    const claimedAt = now();
+    const claim = await control.store.claimNotificationDelivery(
+      key,
+      claimedAt.toISOString(),
+      new Date(claimedAt.getTime() + NOTIFICATION_LEASE_MS).toISOString(),
+      new Date(claimedAt.getTime() - NOTIFICATION_RETENTION_MS).toISOString(),
+    );
+    if (claim.kind === "finalized") continue;
+    if (claim.kind === "processing") {
+      transientFailure = true;
+      continue;
+    }
+    const result = await apns.send({ token: token.token, environment: token.environment, intent: body, idempotencyKey: key });
+    if (result.kind === "success") {
+      delivered += 1;
+      await control.store.finalizeNotificationDelivery(key, claim.claimId, now().toISOString());
+    } else if (result.kind === "invalid_token") {
+      await control.store.invalidatePushToken(token.token, token.environment);
+      await control.store.finalizeNotificationDelivery(key, claim.claimId, now().toISOString());
+    } else if (result.kind === "permanent_failure") {
+      await control.store.finalizeNotificationDelivery(key, claim.claimId, now().toISOString());
+    }
+    else if (result.kind === "transient_failure" || result.kind === "rate_limited") {
+      await control.store.releaseNotificationDelivery(key, claim.claimId);
+      transientFailure ||= result.kind === "transient_failure";
+      rateLimited ||= result.kind === "rate_limited";
+    }
+  }
+  if (rateLimited) return send(response, 429, { error: "apns_rate_limited" });
+  if (transientFailure) return send(response, 503, { error: "apns_unavailable" });
+  send(response, 202, { accepted: true, delivered });
 }
 async function register(
   request: IncomingMessage,
@@ -214,5 +302,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 function text(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function isPushTokenRegistration(value: unknown): value is {
+  token: string;
+  environment: PushEnvironment;
+  preferences: NotificationPreferences;
+} {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["token", "environment", "preferences"])) return false;
+  return typeof value.token === "string" && /^(?:[0-9a-fA-F]{2}){1,256}$/.test(value.token) &&
+    (value.environment === "development" || value.environment === "production") &&
+    isNotificationPreferences(value.preferences);
+}
+
+function isNotificationPreferences(value: unknown): value is NotificationPreferences {
+  return isRecord(value) && hasOnlyKeys(value, ["enabled", "waitingEnabled", "completionEnabled"]) &&
+    typeof value.enabled === "boolean" && typeof value.waitingEnabled === "boolean" &&
+    typeof value.completionEnabled === "boolean";
+}
+
+function isNotificationIntent(value: unknown): value is NotificationIntent {
+  if (!isRecord(value) || !hasOnlyKeys(value, [
+    "projectId", "sessionId", "sequence", "category", "projectName", "sessionTitle", "createdAt",
+  ])) return false;
+  return text(value.projectId) && text(value.sessionId) && Number.isSafeInteger(value.sequence) &&
+    (value.sequence as number) >= 0 &&
+    ["approval_waiting", "question_waiting", "task_completed", "task_failed"].includes(String(value.category)) &&
+    text(value.projectName) && unicodeScalarCount(value.projectName) <= 200 && text(value.sessionTitle) &&
+    unicodeScalarCount(value.sessionTitle) <= 200 && isProtocolTimestamp(value.createdAt);
+}
+
+function allows(preferences: NotificationPreferences, category: NotificationIntent["category"]): boolean {
+  if (!preferences.enabled) return false;
+  return category === "approval_waiting" || category === "question_waiting"
+    ? preferences.waitingEnabled
+    : preferences.completionEnabled;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+function unicodeScalarCount(value: string): number {
+  return [...value].length;
 }
 class PayloadTooLargeError extends Error {}

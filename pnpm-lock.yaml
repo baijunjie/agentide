@@ -94,7 +94,11 @@ importers:
 
   packages/crypto: {}
 
-  packages/protocol: {}
+  packages/protocol:
+    dependencies:
+      '@agentide/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
 
   packages/shared-types: {}
 

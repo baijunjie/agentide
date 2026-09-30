@@ -1,0 +1,22 @@
+{
+  "tokenRegistration": {
+    "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "environment": "development",
+    "preferences": { "enabled": true, "waitingEnabled": true, "completionEnabled": false }
+  },
+  "nonStandardToken": "0123456789abcdef0123456789abcdef0123456789abcdef",
+  "invalidTokens": [
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde",
+    "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+    "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+  ],
+  "intent": {
+    "projectId": "project-1",
+    "sessionId": "session-1",
+    "sequence": 12,
+    "category": "approval_waiting",
+    "projectName": "Agent IDE",
+    "sessionTitle": "Fix tests",
+    "createdAt": "2026-09-28T00:00:00.000Z"
+  }
+}

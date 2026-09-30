@@ -62,10 +62,12 @@ final class MobileScenarioRuntime {
     private var heldChangesRequests: [String: [String: Any]] = [:]
     private var heldSearchRequests: [String: [String: Any]] = [:]
     private var requests: [String: [String: Any]] = [:]
+    private var listedProjects: [[String: Any]] = []
     private(set) var requestIdsByType: [String: [String]] = [:]
     var holdsChangesResponses = false
     var holdsDiffResponses = false
     var holdsSearchResponses = false
+    var holdsNotificationResponses = false
     private(set) var cancelledSearchIds: [String] = []
 
     let presence: MobileScenarioPresence
@@ -160,10 +162,22 @@ final class MobileScenarioRuntime {
             let type = event["type"] as? String
             return type == "approval.requested" || type == "question.requested"
         }]
+        listedProjects = [project()]
     }
 
     static func fromLaunchArguments(_ arguments: [String] = ProcessInfo.processInfo.arguments) -> MobileScenarioRuntime? {
         MobileScenario.fromLaunchArguments(arguments).map(MobileScenarioRuntime.init)
+    }
+
+    func setListedProjects(_ ids: [String]) {
+        listedProjects = ids.map { id in
+            ["id": id, "name": "Scenario Workspace", "createdAt": "2026-09-27T00:00:00.000Z",
+             "enabledAgents": ["codex"], "online": true]
+        }
+    }
+
+    func setNotificationSession(projectId: String, id: String?, status: String = "waiting_user") {
+        sessions[projectId] = id.map { [Self.session(id: $0, status: status)] } ?? []
     }
 
     func start() -> [Data] {
@@ -179,6 +193,9 @@ final class MobileScenarioRuntime {
         requests[requestId] = request
         if type == "project.listChanges", holdsChangesResponses {
             heldChangesRequests[requestId] = request
+            return []
+        }
+        if (type == "project.list" || type == "session.list") && holdsNotificationResponses {
             return []
         }
         if type == "project.readDiff", holdsDiffResponses { return [] }
@@ -208,7 +225,7 @@ final class MobileScenarioRuntime {
 
         switch type {
         case "project.list":
-            return [success(for: request, type: "project.list.response", replyTo: requestId, payload: ["projects": [project()]])]
+            return [success(for: request, type: "project.list.response", replyTo: requestId, payload: ["projects": listedProjects])]
         case "session.list":
             let projectId = request["projectId"] as? String ?? ""
             return [success(for: request, type: "session.list.response", replyTo: requestId, payload: ["sessions": sessions[projectId] ?? []])]

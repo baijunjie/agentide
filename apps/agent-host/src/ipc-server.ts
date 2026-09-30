@@ -51,6 +51,23 @@ async function route(
     sendJSON(response, 200, { projects: await projects.list() });
     return;
   }
+  if (request.method === "GET" && url.pathname === "/notifications/outbox") {
+    const afterValue = url.searchParams.get("afterCursor");
+    const limitValue = url.searchParams.get("limit");
+    const afterCursor = afterValue === null ? undefined : Number(afterValue);
+    const limit = limitValue === null ? undefined : Number(limitValue);
+    if (afterCursor !== undefined && !Number.isInteger(afterCursor)) throw new Error("afterCursor must be an integer");
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+      throw new Error("limit must be an integer from 1 through 100");
+    }
+    sendJSON(response, 200, await sessions.notificationPage(afterCursor, limit));
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/notifications/outbox/ack") {
+    await sessions.acknowledgeNotifications(requireInteger(await readJSON(request), "cursor"));
+    response.writeHead(204).end();
+    return;
+  }
   if (request.method === "POST" && url.pathname === "/projects") {
     const body = await readJSON(request);
     sendJSON(response, 201, await projects.add(requireString(body, "rootPath"), optionalString(body, "name")));

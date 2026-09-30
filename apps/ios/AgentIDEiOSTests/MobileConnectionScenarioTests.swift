@@ -2,8 +2,361 @@ import XCTest
 import AgentIDEProtocol
 @testable import AgentIDEiOS
 
+private actor RegistrationAttemptGate {
+    private var attempts: [String] = []
+    private var attemptWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
+    private var completionWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func submit(_ token: String) async {
+        attempts.append(token)
+        let count = attempts.count
+        for waiter in attemptWaiters.removeValue(forKey: count) ?? [] {
+            waiter.resume()
+        }
+        await withCheckedContinuation { completionWaiters.append($0) }
+    }
+
+    func waitForAttempt(_ count: Int) async {
+        guard attempts.count < count else { return }
+        await withCheckedContinuation { continuation in
+            attemptWaiters[count, default: []].append(continuation)
+        }
+    }
+
+    func releaseNext() {
+        completionWaiters.removeFirst().resume()
+    }
+
+    func recordedAttempts() -> [String] {
+        attempts
+    }
+}
+
 @MainActor
 final class MobileConnectionScenarioTests: XCTestCase {
+    func testNotificationLaunchArgumentsCoverEveryCategory() {
+        for category in NotificationCategory.allCases {
+            let delivery = PushNotificationManager.launchScenario(
+                from: ["AgentIDEiOS", "--notification-scenario=\(category.rawValue)"]
+            )
+            XCTAssertEqual(delivery?.intent.category, category)
+            XCTAssertTrue(delivery?.opensSession == true)
+        }
+        XCTAssertNil(PushNotificationManager.launchScenario(from: ["AgentIDEiOS", "--notification-scenario=unknown"]))
+    }
+
+    func testForegroundNotificationUsesInAppDeliveryAndSuppressesSystemPresentation() throws {
+        let intent = NotificationIntent(
+            projectId: "project-demo", sessionId: "session-demo", sequence: 10,
+            category: .approvalWaiting, projectName: "Scenario Workspace", sessionTitle: "Scenario session",
+            createdAt: "2026-09-28T00:00:00.000Z"
+        )
+        let data = try JSONEncoder().encode(intent)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let userInfo: [AnyHashable: Any] = ["agentide": payload]
+
+        XCTAssertEqual(PushNotificationManager.foregroundDelivery(from: userInfo), NotificationDelivery(intent: intent, opensSession: false))
+        XCTAssertEqual(PushNotificationManager.foregroundPresentationOptions(for: userInfo), [])
+    }
+
+    func testDeliveryQueuedBeforeObserverAttachmentIsConsumedOnce() {
+        let delivery = NotificationDelivery(intent: NotificationIntent(
+            projectId: "project", sessionId: "session", sequence: 1, category: .approvalWaiting,
+            projectName: "Project", sessionTitle: "Review", createdAt: "2026-09-28T00:00:00.000Z"
+        ), opensSession: true)
+        var queue = NotificationDeliveryQueue()
+        queue.append(delivery)
+
+        XCTAssertEqual(queue.consume(), delivery)
+        XCTAssertNil(queue.consume())
+    }
+
+    func testAuthorizationDecisionAndPreferenceStoreAreInjectable() throws {
+        XCTAssertTrue(NotificationAuthorizationDecision.shouldRegister(for: .authorized))
+        XCTAssertTrue(NotificationAuthorizationDecision.shouldRegister(for: .provisional))
+        XCTAssertFalse(NotificationAuthorizationDecision.shouldRegister(for: .denied))
+        XCTAssertFalse(NotificationAuthorizationDecision.shouldRegister(for: .notDetermined))
+        var registrationAttempts = 0
+        NotificationAuthorizationDecision.registerIfAllowed(for: .authorized) { registrationAttempts += 1 }
+        NotificationAuthorizationDecision.registerIfAllowed(for: .denied) { registrationAttempts += 1 }
+        XCTAssertEqual(registrationAttempts, 1)
+
+        let suite = "NotificationPreferences.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = NotificationPreferencesStore(defaults: defaults)
+        var preferences = NotificationPreferences()
+        preferences.enabled = false
+        preferences.waitingEnabled = false
+        store.save(preferences)
+        XCTAssertEqual(store.load(), preferences)
+
+        let manager = PushNotificationManager(preferencesStore: store)
+        manager.didFailRegistration(URLError(.cannotConnectToHost))
+        XCTAssertNotNil(manager.apnsRegistrationError)
+        manager.didRegister(deviceToken: Data([0x01, 0x02]))
+        XCTAssertNil(manager.apnsRegistrationError)
+        XCTAssertEqual(manager.deviceToken, "0102")
+    }
+
+    func testNotificationResponsesUseSnapshotNavigationAndForegroundSuppression() async {
+        let connection = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
+        await connection.waitForScenarioIdle()
+
+        for category in NotificationCategory.allCases {
+            let intent = NotificationIntent(
+                projectId: "project-demo", sessionId: "session-demo", sequence: 10,
+                category: category, projectName: "Scenario Workspace", sessionTitle: "Scenario session",
+                createdAt: "2026-09-28T00:00:00.000Z"
+            )
+            connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: false))
+            XCTAssertNil(connection.pendingNotificationIntent)
+            XCTAssertNotNil(connection.notificationNotice)
+
+            connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+            XCTAssertEqual(connection.pendingNotificationIntent, intent)
+            await connection.waitForScenarioIdle()
+            XCTAssertEqual(connection.sessions["project-demo"]?.first?.id, "session-demo")
+            connection.clearPendingNotification()
+        }
+    }
+
+    func testNotificationNavigationClearsMissingProjectAndSessionTargets() async {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        let intent = NotificationIntent(
+            projectId: "project-demo", sessionId: "session-demo", sequence: 10,
+            category: .approvalWaiting, projectName: "Scenario Workspace", sessionTitle: "Scenario session",
+            createdAt: "2026-09-28T00:00:00.000Z"
+        )
+
+        runtime.setListedProjects([])
+        connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+        await connection.waitForScenarioIdle()
+        XCTAssertNil(connection.pendingNotificationIntent)
+        XCTAssertEqual(connection.notificationNotice, "The notification project is no longer available. Showing projects instead.")
+
+        runtime.setListedProjects(["project-demo"])
+        runtime.setNotificationSession(projectId: "project-demo", id: nil)
+        connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+        await connection.waitForScenarioIdle()
+        XCTAssertNil(connection.pendingNotificationIntent)
+        XCTAssertEqual(connection.notificationNotice, "The notification target is no longer available. Showing this project's sessions instead.")
+        XCTAssertEqual(connection.notificationOutcomeProjectId, "project-demo")
+        XCTAssertEqual(connection.notificationNavigationProjectId, "project-demo")
+        connection.consumeNotificationNavigationOutcome()
+        XCTAssertNil(connection.notificationNavigationProjectId)
+        XCTAssertNil(connection.notificationOutcomeProjectId)
+        connection.requestProjects()
+        await connection.waitForScenarioIdle()
+        XCTAssertNil(connection.notificationNavigationProjectId)
+    }
+
+    func testUnpairClearsPendingNotificationNavigationState() async {
+        let connection = MobileConnection(scenarioRuntime: MobileScenarioRuntime(scenario: .comprehensive))
+        await connection.waitForScenarioIdle()
+        let intent = NotificationIntent(
+            projectId: "project-demo", sessionId: "session-demo", sequence: 10,
+            category: .approvalWaiting, projectName: "Scenario Workspace", sessionTitle: "Scenario session",
+            createdAt: "2026-09-28T00:00:00.000Z"
+        )
+        connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+        XCTAssertNotNil(connection.pendingNotificationIntent)
+
+        await connection.revokeSelf()
+
+        XCTAssertFalse(connection.paired)
+        XCTAssertNil(connection.pendingNotificationIntent)
+        XCTAssertNil(connection.notificationNavigationProjectId)
+        XCTAssertNil(connection.notificationNotice)
+        XCTAssertNil(connection.notificationRegistrationError)
+    }
+
+    func testNotificationNavigationDoesNotUseRecoveredProjectUntilAuthoritativeResponse() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.projects.map(\.id), ["project-demo"])
+        runtime.holdsNotificationResponses = true
+        runtime.setListedProjects([])
+        let intent = NotificationIntent(projectId: "project-demo", sessionId: "session-demo", sequence: 10,
+                                        category: .approvalWaiting, projectName: "Scenario Workspace", sessionTitle: "Scenario session",
+                                        createdAt: "2026-09-28T00:00:00.000Z")
+        connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+
+        XCTAssertNil(connection.notificationNavigationProjectId)
+        let requestId = try XCTUnwrap(runtime.requestIdsByType["project.list"]?.last)
+        let response = try XCTUnwrap(runtime.response(for: requestId, type: "project.list.response", payload: ["projects": []]))
+        connection.injectScenarioInbound([response])
+        await connection.waitForScenarioIdle()
+        XCTAssertNil(connection.notificationNavigationProjectId)
+        XCTAssertNil(connection.pendingNotificationIntent)
+    }
+
+    func testNotificationNavigationReleasesTrackersAfterProjectAndSessionFailures() async throws {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        runtime.holdsNotificationResponses = true
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        let intent = NotificationIntent(projectId: "project-demo", sessionId: "session-demo", sequence: 10,
+                                        category: .approvalWaiting, projectName: "Scenario Workspace", sessionTitle: "Scenario session",
+                                        createdAt: "2026-09-28T00:00:00.000Z")
+        connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+        let projectRequest = try XCTUnwrap(runtime.requestIdsByType["project.list"]?.last)
+        let projectError = try XCTUnwrap(runtime.failureResponse(for: projectRequest, type: "project.list.response", code: "FAILED", message: "Project list failed"))
+        connection.injectScenarioInbound([projectError])
+        await connection.waitForScenarioIdle()
+        connection.retryNotificationNavigation()
+        let retryProject = try XCTUnwrap(runtime.requestIdsByType["project.list"]?.last)
+        XCTAssertNotEqual(projectRequest, retryProject)
+        let projectResponse = try XCTUnwrap(runtime.response(for: retryProject, type: "project.list.response", payload: ["projects": [notificationProject()]]))
+        connection.injectScenarioInbound([projectResponse])
+        await connection.waitForScenarioIdle()
+        let sessionRequest = try XCTUnwrap(runtime.requestIdsByType["session.list"]?.last)
+        let rawSessionError = try XCTUnwrap(runtime.failureResponse(for: sessionRequest, type: "session.list.response", code: "FAILED", message: "Session list failed"))
+        var sessionError = try XCTUnwrap(JSONSerialization.jsonObject(with: rawSessionError) as? [String: Any])
+        sessionError["projectId"] = "project-demo"
+        connection.injectScenarioInbound([try JSONSerialization.data(withJSONObject: sessionError)])
+        await connection.waitForScenarioIdle()
+        connection.retryNotificationNavigation()
+        XCTAssertGreaterThan(runtime.requestIdsByType["project.list"]?.count ?? 0, 2)
+    }
+
+    func testNotificationNavigationRechecksReadinessWhenSessionIdentifierIsUnchanged() async {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        let intent = NotificationIntent(
+            projectId: "project-demo", sessionId: "session-demo", sequence: 10,
+            category: .approvalWaiting, projectName: "Scenario Workspace", sessionTitle: "Scenario session",
+            createdAt: "2026-09-28T00:00:00.000Z"
+        )
+        runtime.setNotificationSession(projectId: "project-demo", id: "session-demo", status: "idle")
+        connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+        await connection.waitForScenarioIdle()
+        XCTAssertNil(connection.pendingNotificationIntent)
+        XCTAssertEqual(connection.notificationNotice, "That request has already been resolved. Showing this project's sessions instead.")
+        XCTAssertEqual(connection.notificationOutcomeProjectId, "project-demo")
+
+        runtime.setNotificationSession(projectId: "project-demo", id: "session-demo", status: "waiting_user")
+        connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.pendingNotificationIntent, intent)
+        XCTAssertEqual(connection.notificationReadyProjectId, "project-demo")
+        XCTAssertGreaterThan(connection.notificationNavigationRevision, 0)
+    }
+
+    func testNotificationNavigationRetriesAfterAnInFlightRequestLosesPresence() async {
+        let runtime = MobileScenarioRuntime(scenario: .comprehensive)
+        runtime.holdsNotificationResponses = true
+        let connection = MobileConnection(scenarioRuntime: runtime)
+        await connection.waitForScenarioIdle()
+        let intent = NotificationIntent(
+            projectId: "project-demo", sessionId: "session-demo", sequence: 10,
+            category: .approvalWaiting, projectName: "Scenario Workspace", sessionTitle: "Scenario session",
+            createdAt: "2026-09-28T00:00:00.000Z"
+        )
+        let initialProjectRequests = runtime.requestIdsByType["project.list"]?.count ?? 0
+
+        connection.receiveNotification(NotificationDelivery(intent: intent, opensSession: true))
+        XCTAssertEqual(runtime.requestIdsByType["project.list"]?.count, initialProjectRequests + 1)
+        connection.injectScenarioInbound([presence(online: false)])
+        await connection.waitForScenarioIdle()
+        XCTAssertEqual(connection.notificationNotice, "Your Mac is offline. This notification will open when it reconnects.")
+
+        runtime.holdsNotificationResponses = false
+        connection.injectScenarioInbound([presence(online: true)])
+        await connection.waitForScenarioIdle()
+        // Presence refreshes the normal project list and separately restarts the notification's authoritative lookup.
+        XCTAssertEqual(runtime.requestIdsByType["project.list"]?.count, initialProjectRequests + 3)
+        XCTAssertEqual(connection.notificationReadyProjectId, "project-demo")
+    }
+
+    func testPushRegistrationCoordinatorCoalescesLatestIntentAndRetriesDirtyRegistration() async {
+        var submitted: [String] = []
+        var failures = 0
+        var shouldFail = true
+        let coordinator = PushRegistrationCoordinator(
+            submit: { token, _ in
+                submitted.append(token)
+                if shouldFail {
+                    shouldFail = false
+                    throw URLError(.cannotConnectToHost)
+                }
+            },
+            failed: { _ in failures += 1 }
+        )
+        let preferences = NotificationPreferences()
+        coordinator.update(token: "stale", preferences: preferences)
+        coordinator.update(token: "latest", preferences: preferences)
+        await Task.yield()
+        await Task.yield()
+        XCTAssertEqual(submitted, ["latest"])
+        XCTAssertEqual(failures, 1)
+
+        coordinator.retry()
+        await Task.yield()
+        await Task.yield()
+        XCTAssertEqual(submitted, ["latest", "latest"])
+    }
+
+    func testPushRegistrationCoordinatorSubmitsLatestIntentAfterAnInFlightRegistration() async {
+        let gate = RegistrationAttemptGate()
+        let coordinator = PushRegistrationCoordinator(
+            submit: { token, _ in await gate.submit(token) },
+            failed: { _ in XCTFail("Registration should not fail") }
+        )
+        let preferences = NotificationPreferences()
+
+        coordinator.update(token: "old", preferences: preferences)
+        await gate.waitForAttempt(1)
+        coordinator.update(token: "new", preferences: preferences)
+        await gate.releaseNext()
+        await gate.waitForAttempt(2)
+        await gate.releaseNext()
+
+        let attempts = await gate.recordedAttempts()
+        XCTAssertEqual(attempts, ["old", "new"])
+    }
+
+    func testPushRegistrationResetInvalidatesAnInFlightAttemptForTheSameToken() async {
+        let gate = RegistrationAttemptGate()
+        var successes = 0
+        var failures = 0
+        let coordinator = PushRegistrationCoordinator(
+            submit: { token, _ in await gate.submit(token) },
+            failed: { _ in failures += 1 },
+            succeeded: { successes += 1 }
+        )
+        let preferences = NotificationPreferences()
+
+        coordinator.update(token: "same-token", preferences: preferences)
+        await gate.waitForAttempt(1)
+        coordinator.reset()
+        coordinator.update(token: "same-token", preferences: preferences)
+        await gate.waitForAttempt(2)
+        await gate.releaseNext()
+        await Task.yield()
+        XCTAssertEqual(successes, 0)
+        XCTAssertEqual(failures, 0)
+        await gate.releaseNext()
+        await Task.yield()
+
+        let attempts = await gate.recordedAttempts()
+        XCTAssertEqual(attempts, ["same-token", "same-token"])
+        XCTAssertEqual(successes, 1)
+        XCTAssertEqual(failures, 0)
+    }
+
+    private func presence(online: Bool) -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "type": "system.presence",
+            "sourceDeviceId": "scenario-mac",
+            "payload": ["online": online],
+        ])
+    }
+
     func testAgentReferenceFormatsRelativePathsAsLiteralText() {
         XCTAssertEqual(AgentFileReference.format(relativePath: "Sources/Context Guide [draft] 说明.md"), "@Sources/Context Guide [draft] 说明.md")
         XCTAssertNil(AgentFileReference.format(relativePath: ""))
@@ -313,6 +666,10 @@ final class MobileConnectionScenarioTests: XCTestCase {
             "payload": report
         ]
         return try JSONSerialization.data(withJSONObject: envelope)
+    }
+
+    private func notificationProject() -> [String: Any] {
+        ["id": "project-demo", "name": "Scenario Workspace", "createdAt": "2026-09-27T00:00:00.000Z", "enabledAgents": ["codex"], "online": true]
     }
 
     func testFileSearchCoversResultsEmptyLimitFailureAndOffline() async throws {

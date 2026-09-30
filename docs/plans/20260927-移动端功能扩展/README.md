@@ -17,9 +17,9 @@
 
 | 顺序 | 计划 | 主要价值 | 自动化边界 | 状态 |
 | --- | --- | --- | --- | --- |
-| 05 | [Push Notification](05-PushNotification.md) | Agent 等待用户或完成时及时提醒 | 业务逻辑可自动化，APNs 投递必须真机验证 | 待开发 |
+| 05 | [Push Notification](05-PushNotification.md) | Agent 等待用户或完成时及时提醒 | 业务逻辑可自动化，APNs 投递必须真机验证 | 实现完成，待真机 APNs 验收 |
 
-剩余迭代为 05 Push Notification，涉及 APNs、系统权限和后台行为。
+05 Push Notification 的自动化实现已完成；剩余工作是开发与生产 APNs 环境及真机系统集成验收。
 
 ## 统一自动化门槛
 

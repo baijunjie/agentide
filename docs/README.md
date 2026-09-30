@@ -6,6 +6,7 @@
 - [三端通信与 Agent 契约](product/protocol.md)：Envelope、统一 Agent 事件、结构化报告、适配器和共享业务对象的现行契约。
 - [Agent 会话执行与事件投递](product/agent-sessions.md)：会话生命周期、Claude/Codex 执行与报告工具、Agent Host 持久化、iPhone 会话交互与可靠重放规则。
 - [设备配对与 Relay 连接](product/device-pairing.md)：Mac 与 iPhone 的设备身份、配对、鉴权、在线状态、路由、撤销和重连规则。
+- [Agent 会话推送通知](product/push-notifications.md)：等待用户、任务完成或失败通知的偏好、可靠投递、iPhone 导航和 APNs 部署契约。
 - [项目登记与文件浏览](product/project-files.md)：Mac 项目登记、远程项目元数据、iPhone 文件树与项目文件搜索、只读文件查看交互，以及项目根目录沙箱规则。
 - [Git 变更与统一 Diff 审查](product/git-changes.md)：iPhone 的 Changes 列表、Diff Viewer、`file.changed` 深链以及 Agent Host 只读 Git 查询边界。
 - [应用模块](../apps/README.md)：macOS、iOS、Relay Server 与 Agent Host 的入口和对外接口。

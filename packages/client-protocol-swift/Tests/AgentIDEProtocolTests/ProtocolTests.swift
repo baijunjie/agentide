@@ -199,6 +199,78 @@ private func fixture(named name: String) throws -> Data {
     #expect(models.fileEntry.type == .file)
 }
 
+@Test func notificationControlPlaneFixtureUsesMinimalMetadata() throws {
+    struct Fixtures: Decodable {
+        let tokenRegistration: PushTokenRegistration
+        let nonStandardToken: String
+        let invalidTokens: [String]
+        let intent: NotificationIntent
+    }
+
+    let fixtures = try JSONDecoder().decode(Fixtures.self, from: fixture(named: "notifications"))
+    #expect(fixtures.intent.category == .approvalWaiting)
+    #expect(fixtures.intent.sequence == 12)
+    #expect(fixtures.tokenRegistration.preferences.waitingEnabled)
+    #expect(!fixtures.tokenRegistration.preferences.completionEnabled)
+    let nonStandardRegistration = PushTokenRegistration(
+        token: fixtures.nonStandardToken,
+        environment: .development,
+        preferences: fixtures.tokenRegistration.preferences
+    )
+    let nonStandardEncoded = try JSONEncoder().encode(nonStandardRegistration)
+    #expect(try JSONDecoder().decode(PushTokenRegistration.self, from: nonStandardEncoded).token == fixtures.nonStandardToken)
+    let maximumLengthRegistration = PushTokenRegistration(
+        token: String(repeating: "A", count: 512),
+        environment: .development,
+        preferences: fixtures.tokenRegistration.preferences
+    )
+    _ = try JSONEncoder().encode(maximumLengthRegistration)
+
+    for token in fixtures.invalidTokens {
+        let registration = #"{"token":"\#(token)","environment":"development","preferences":{"enabled":true,"waitingEnabled":true,"completionEnabled":false}}"#
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(PushTokenRegistration.self, from: Data(registration.utf8))
+        }
+    }
+    let oversizedRegistration = PushTokenRegistration(
+        token: String(repeating: "A", count: 514),
+        environment: .development,
+        preferences: fixtures.tokenRegistration.preferences
+    )
+    #expect(throws: (any Error).self) {
+        _ = try JSONEncoder().encode(oversizedRegistration)
+    }
+    let malformedRegistration = PushTokenRegistration(
+        token: String(repeating: "g", count: 64),
+        environment: .development,
+        preferences: NotificationPreferences(enabled: true, waitingEnabled: true, completionEnabled: false)
+    )
+    #expect(throws: (any Error).self) {
+        _ = try JSONEncoder().encode(malformedRegistration)
+    }
+
+    for json in [
+        #"{"projectId":"p","sessionId":"s","sequence":-1,"category":"task_completed","projectName":"P","sessionTitle":"S","createdAt":"2026-09-28T00:00:00Z"}"#,
+        #"{"projectId":"p","sessionId":"s","sequence":9007199254740992,"category":"task_completed","projectName":"P","sessionTitle":"S","createdAt":"2026-09-28T00:00:00Z"}"#,
+        #"{"projectId":"p","sessionId":"s","sequence":1,"category":"task_completed","projectName":"P","sessionTitle":"S","createdAt":"2026-09-28T00:00:00Z","message":"secret"}"#,
+    ] {
+        #expect(throws: (any Error).self) {
+            _ = try JSONDecoder().decode(NotificationIntent.self, from: Data(json.utf8))
+        }
+    }
+
+    let emojiIntent: [String: Any] = [
+        "projectId": "p", "sessionId": "s", "sequence": 1, "category": "task_completed",
+        "projectName": String(repeating: "😀", count: 200), "sessionTitle": "S", "createdAt": "2026-09-28T00:00:00Z",
+    ]
+    _ = try JSONDecoder().decode(NotificationIntent.self, from: JSONSerialization.data(withJSONObject: emojiIntent))
+    var oversizedEmojiIntent = emojiIntent
+    oversizedEmojiIntent["projectName"] = String(repeating: "😀", count: 201)
+    #expect(throws: (any Error).self) {
+        _ = try JSONDecoder().decode(NotificationIntent.self, from: JSONSerialization.data(withJSONObject: oversizedEmojiIntent))
+    }
+}
+
 @Test func gitChangesFixturesEnforceDTOBoundaries() throws {
     struct Fixtures: Decodable {
         let projectChangesResponse: ProjectChangesResponse

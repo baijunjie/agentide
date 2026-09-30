@@ -6,6 +6,7 @@ import { ClaudeAdapter } from "@agentide/agent-claude";
 import { CodexAdapter } from "@agentide/agent-codex";
 import { ProjectStore } from "./project-store.js";
 import { SessionStore } from "./session-store.js";
+import type { NotificationOutboxPage } from "./notification-outbox.js";
 
 const SNAPSHOT_EVENT_LIMIT = 200;
 
@@ -56,6 +57,14 @@ export class SessionManager {
   async events(sessionId: string, afterSequence?: number): Promise<AgentEvent[]> {
     await this.get(sessionId);
     return this.store.events(sessionId, afterSequence);
+  }
+
+  notificationPage(afterCursor?: number, limit?: number): Promise<NotificationOutboxPage> {
+    return this.store.notificationPage(afterCursor, limit);
+  }
+
+  acknowledgeNotifications(cursor: number): Promise<void> {
+    return this.store.acknowledgeNotifications(cursor);
   }
 
   async snapshot(sessionId: string): Promise<SessionSnapshot> {
@@ -150,6 +159,7 @@ export class SessionManager {
       "close" in adapter && typeof adapter.close === "function" ? adapter.close() : Promise.resolve(),
     ));
     await Promise.allSettled(this.pumps.values());
+    await this.store.flushNotifications?.();
   }
 
   private attach(sessionId: string, adapter: AgentAdapter, runtimeId: string): void {

@@ -37,6 +37,137 @@ public enum SessionStatus: String, Codable, Sendable {
     case cancelled
 }
 
+public enum NotificationCategory: String, Codable, CaseIterable, Sendable {
+    case approvalWaiting = "approval_waiting"
+    case questionWaiting = "question_waiting"
+    case taskCompleted = "task_completed"
+    case taskFailed = "task_failed"
+
+    public var isWaiting: Bool {
+        self == .approvalWaiting || self == .questionWaiting
+    }
+}
+
+public struct NotificationIntent: Codable, Equatable, Sendable {
+    public let projectId: String
+    public let sessionId: String
+    public let sequence: Int
+    public let category: NotificationCategory
+    public let projectName: String
+    public let sessionTitle: String
+    public let createdAt: String
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case projectId, sessionId, sequence, category, projectName, sessionTitle, createdAt
+    }
+
+    public init(
+        projectId: String,
+        sessionId: String,
+        sequence: Int,
+        category: NotificationCategory,
+        projectName: String,
+        sessionTitle: String,
+        createdAt: String
+    ) {
+        self.projectId = projectId
+        self.sessionId = sessionId
+        self.sequence = sequence
+        self.category = category
+        self.projectName = projectName
+        self.sessionTitle = sessionTitle
+        self.createdAt = createdAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        projectId = try container.decode(String.self, forKey: .projectId)
+        sessionId = try container.decode(String.self, forKey: .sessionId)
+        sequence = try decodeJSONSafeNonNegativeInt(container, forKey: .sequence)
+        category = try container.decode(NotificationCategory.self, forKey: .category)
+        projectName = try container.decode(String.self, forKey: .projectName)
+        sessionTitle = try container.decode(String.self, forKey: .sessionTitle)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        guard !projectId.isEmpty, !sessionId.isEmpty,
+              !projectName.isEmpty, projectName.unicodeScalars.count <= 200,
+              !sessionTitle.isEmpty, sessionTitle.unicodeScalars.count <= 200,
+              isTimestamp(createdAt) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid notification intent"))
+        }
+    }
+}
+
+public struct NotificationPreferences: Codable, Equatable, Sendable {
+    public var enabled: Bool
+    public var waitingEnabled: Bool
+    public var completionEnabled: Bool
+    private enum CodingKeys: String, CodingKey, CaseIterable { case enabled, waitingEnabled, completionEnabled }
+
+    public init(enabled: Bool = true, waitingEnabled: Bool = true, completionEnabled: Bool = true) {
+        self.enabled = enabled
+        self.waitingEnabled = waitingEnabled
+        self.completionEnabled = completionEnabled
+    }
+
+    public func allows(_ category: NotificationCategory) -> Bool {
+        enabled && (category.isWaiting ? waitingEnabled : completionEnabled)
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        waitingEnabled = try container.decode(Bool.self, forKey: .waitingEnabled)
+        completionEnabled = try container.decode(Bool.self, forKey: .completionEnabled)
+    }
+}
+
+public enum PushEnvironment: String, Codable, Sendable {
+    case development
+    case production
+}
+
+public struct PushTokenRegistration: Codable, Equatable, Sendable {
+    public let token: String
+    public let environment: PushEnvironment
+    public let preferences: NotificationPreferences
+    private enum CodingKeys: String, CodingKey, CaseIterable { case token, environment, preferences }
+
+    public init(token: String, environment: PushEnvironment, preferences: NotificationPreferences) {
+        self.token = token
+        self.environment = environment
+        self.preferences = preferences
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        token = try container.decode(String.self, forKey: .token)
+        environment = try container.decode(PushEnvironment.self, forKey: .environment)
+        preferences = try container.decode(NotificationPreferences.self, forKey: .preferences)
+        guard isAPNsDeviceToken(token) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid APNs token"))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        guard isAPNsDeviceToken(token) else {
+            throw EncodingError.invalidValue(token, .init(codingPath: encoder.codingPath, debugDescription: "Invalid APNs token"))
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(token, forKey: .token)
+        try container.encode(environment, forKey: .environment)
+        try container.encode(preferences, forKey: .preferences)
+    }
+}
+
+private func isAPNsDeviceToken(_ value: String) -> Bool {
+    let count = value.unicodeScalars.count
+    return count >= 2 && count <= 512 && count.isMultiple(of: 2) && value.unicodeScalars.allSatisfy { scalar in
+        (48...57).contains(scalar.value) || (65...70).contains(scalar.value) || (97...102).contains(scalar.value)
+    }
+}
+
 public struct Project: Codable, Equatable, Sendable {
     public let id: String
     public let name: String

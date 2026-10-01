@@ -208,6 +208,7 @@ final class MacConnection: ObservableObject {
         if type == "agent.event.ack", let sessionId = message["sessionId"] as? String,
            let payload = message["payload"] as? [String: Any], let sequence = payload["sequence"] as? Int {
             let key = EventStreamKey(targetDeviceId: source, sessionId: sessionId)
+            // Never let a stale or speculative ACK skip events the current stream lifetime has not sent.
             guard sequence <= sentEventSequences[key] ?? -1 else { return }
             acknowledgedEventSequences[key] = max(acknowledgedEventSequences[key] ?? -1, sequence)
             return
@@ -244,6 +245,7 @@ final class MacConnection: ObservableObject {
             let hostSearchID = fileSearchHostID(source: source, searchId: search.searchId)
             fileSearchTasks[key]?.cancel()
             fileSearchTokens[key] = token
+            // Keep search off the receive path so cancel or replacement requests remain processable; cancellation is best-effort, so the token fences late results and cleanup.
             fileSearchTasks[key] = Task { [weak self] in
                 guard let self else { return }
                 defer {
@@ -497,6 +499,7 @@ final class MacConnection: ObservableObject {
         }
         sessionStreamGenerations[key] = (sessionStreamGenerations[key] ?? 0) + 1
         guard sessionStreams[key] == nil else { return }
+        // Task cancellation is best-effort; the token prevents a late task from mutating or removing its replacement stream.
         let streamToken = UUID()
         sessionStreamTokens[key] = streamToken
         sessionStreams[key] = Task { [weak self] in

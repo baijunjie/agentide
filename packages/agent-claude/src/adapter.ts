@@ -161,6 +161,7 @@ export class ClaudeAdapter implements AgentAdapter {
       resolveStarted,
       rejectStarted,
     };
+    // Claim the session before startTurn reaches its asynchronous resume probe, or concurrent sends can both pass the idle check.
     state.activeTurn = turn;
     turn.completion = this.startTurn(state, turn, input);
     void turn.completion.catch(() => undefined);
@@ -177,6 +178,7 @@ export class ClaudeAdapter implements AgentAdapter {
       state.session.updatedAt = this.now().toISOString();
       this.emit(state, { type: "message", role: "user", content: input.content, format: "plain" });
       this.emit(state, { type: "status", status: "running" });
+      // Stream construction can fail synchronously, while startup may also fail on iteration; resolve started only after construction and let consume own iterator failures.
       const stream = this.runQuery({
         prompt: input.content,
         workingDirectory: state.workingDirectory ?? "",
@@ -630,6 +632,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 function throwIfAborted(signal: AbortSignal): void {
+  // AbortSignal does not replay an abort event to listeners registered after cancellation.
   if (!signal.aborted) return;
   throw signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError");
 }

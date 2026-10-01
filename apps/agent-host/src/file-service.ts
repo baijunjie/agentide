@@ -195,6 +195,7 @@ export class LocalFileService {
   ): Promise<{ output: Buffer; truncated: boolean }> {
     const project = await this.projects.get(projectId);
     if (project === undefined) throw new Error("Project not found");
+    // Abort events are not replayed, so check before spawning; once running, cancellation must terminate the native helper rather than only abandon its promise.
     if (options.signal?.aborted === true) throw new FileSearchError("search_cancelled", "Search was cancelled");
     return new Promise<{ output: Buffer; truncated: boolean }>((resolve, reject) => {
       const process = spawn(HELPER_PATH, [operation, project.rootPath, relativePath], { stdio: ["ignore", "pipe", "pipe"] });

@@ -2,14 +2,13 @@
 
 ## 开工前
 
-- 开工前调用 `docs` skill 建立项目上下文。
-- 开工前调用 `dev-memory` skill 读取相关开发记忆。
+- 开工前调用 `agent-docs` skill，读取总索引与当前任务相关的项目文档和开发记忆。
 
 ## 开发收尾
 
-- 开发收尾时调用 `change-check` skill，并派 `change-checker` 子代理做改动检查。
-- 开发收尾需要写或更新产品文档与项目地图时，派 `doc-writer` 子代理处理。
-- 开发收尾时，派 `memory-writer` 子代理判断并沉淀开发记忆。
+- 开发收尾时调用 `agent-change-check` skill，并派 `change-checker` 子代理做改动检查。
+- 开发收尾时调用 `agent-docs` skill，按改动类型派对应子代理维护项目地图、产品文档与开发记忆，
+  再更新总索引。
 
 ## 开发流程：Git Worktree
 

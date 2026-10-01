@@ -1,5 +1,5 @@
 ---
-name: change-check
+name: agent-change-check
 description: 改动检查入口：收尾时派 change-checker 子代理审查本次改动，意见谈拢后修改、再审直到通过。用于"定稿了""可以了，提交吧""发个 PR""合并吧""审一下这次的改动"等场景。
 ---
 

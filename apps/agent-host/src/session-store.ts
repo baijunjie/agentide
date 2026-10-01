@@ -214,6 +214,7 @@ export class SessionStore {
           const path = this.eventPath(session.id);
           const content = await readFile(path, "utf8");
           persisted = parseEventLog(content);
+          // parseEventLog tolerates a partial final record, but appending before repair would join the next event onto that corrupt tail.
           if (content.length > 0 && !content.endsWith("\n")) await rewriteEventLog(path, persisted);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
